@@ -1,15 +1,19 @@
 import { NextResponse } from 'next/server';
-import { createSurveySpreadsheet, shareSpreadsheet, writeQuestions, addSurveyToIndex } from '@/lib/googleSheets';
+import { createSurveySpreadsheet, writeQuestions, addSurveyToIndex } from '@/lib/googleSheets';
 
 export const runtime = 'nodejs';
 
 // POST /api/sheets/push  { questions: string[], name: string }
 //
 // Multi-survey: every push creates a brand-new spreadsheet (not reused
-// across surveys), shares it with USER_GOOGLE_EMAIL if set, writes the
-// questions in, and logs it in the index sheet so there's always a record
-// of every survey's link. Returns the new spreadsheet's ID (this IS the
-// survey identifier from here on -- no separate ID to track) and URL.
+// across surveys), writes the questions in, and logs it in the index sheet
+// so there's always a record of every survey's link. Returns the new
+// spreadsheet's ID (this IS the survey identifier from here on -- no
+// separate ID to track) and URL.
+//
+// No separate "share with me" step: the Google client impersonates
+// USER_GOOGLE_EMAIL via domain-wide delegation (see lib/googleSheets.ts),
+// so every new spreadsheet is already owned by that account directly.
 export async function POST(request: Request) {
   const body = await request.json();
   const questions = body.questions;
@@ -24,11 +28,6 @@ export async function POST(request: Request) {
 
   try {
     const { spreadsheetId, url } = await createSurveySpreadsheet(name);
-
-    const shareEmail = process.env.USER_GOOGLE_EMAIL;
-    if (shareEmail) {
-      await shareSpreadsheet(spreadsheetId, shareEmail);
-    }
 
     await writeQuestions(spreadsheetId, questions);
 

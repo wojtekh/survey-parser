@@ -68,9 +68,20 @@ function getAuthClient(): JWT {
   // the value arrives correctly escaped or double-escaped.
   const normalizedKey = rawKey.replace(/\\+n/g, '\n').trim();
 
+  // Impersonate USER_GOOGLE_EMAIL via domain-wide delegation (set up in
+  // Google Workspace admin) rather than acting as the bare service account.
+  // Service accounts have essentially no Drive storage of their own, so
+  // creating brand-new spreadsheets as the service account fails with a
+  // 403 even though reading/writing files already shared with it works
+  // fine. Impersonating a real Workspace user routes creation through that
+  // user's own storage/ownership instead, which is what Google recommends
+  // for exactly this case.
+  const subject = process.env.USER_GOOGLE_EMAIL || undefined;
+
   cachedClient = new JWT({
     email,
     key: normalizedKey,
+    subject,
     scopes: [
       'https://www.googleapis.com/auth/spreadsheets',
       // drive.file (not full drive access) -- only grants access to files
