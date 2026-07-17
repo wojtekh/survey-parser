@@ -62,7 +62,11 @@ function getAuthClient(): JWT {
     lengthTrimmedAway: rawKey.length - trimmed.length,
   });
 
-  const normalizedKey = rawKey.replace(/\\n/g, '\n').trim();
+  // Some hosting panels (observed with Coolify) double every backslash in
+  // stored env var values, turning the intended single "\n" escape into
+  // "\\n". Match one-or-more backslashes before "n" so this works whether
+  // the value arrives correctly escaped or double-escaped.
+  const normalizedKey = rawKey.replace(/\\+n/g, '\n').trim();
 
   cachedClient = new JWT({
     email,
