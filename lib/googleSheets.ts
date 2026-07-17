@@ -50,6 +50,16 @@ function getAuthClient(): JWT {
     // merging in the hosting panel if true -- names only, no values leaked.
     containsOtherVarNames: ['GOOGLE_INDEX_SHEET_ID', 'USER_GOOGLE_EMAIL', 'AGENT_TOOLS_SECRET', 'ANTHROPIC_API_KEY']
       .filter((name) => rawKey.includes(name)),
+    // Char codes only (never the characters/content) for whatever trails
+    // the END marker -- safe to log, tells us if it's whitespace, a stray
+    // escape sequence, or something else.
+    trailingCharCodesAfterEndMarker:
+      endIdx !== -1
+        ? Array.from(trimmed.slice(endIdx + endMarker.length)).map((c) => c.charCodeAt(0))
+        : null,
+    beginMarkerOccurrences: (rawKey.match(/-----BEGIN PRIVATE KEY-----/g) || []).length,
+    endMarkerOccurrences: (rawKey.match(/-----END PRIVATE KEY-----/g) || []).length,
+    lengthTrimmedAway: rawKey.length - trimmed.length,
   });
 
   const normalizedKey = rawKey.replace(/\\n/g, '\n').trim();
