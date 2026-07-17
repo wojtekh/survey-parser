@@ -29,9 +29,26 @@ function getAuthClient(): JWT {
     );
   }
 
+  // Diagnostic only -- no secret material logged, just shape/length info,
+  // to debug env-var corruption between the hosting panel and the running
+  // container without printing the key itself anywhere.
+  const trimmed = rawKey.trim();
+  console.log('[googleSheets] private key diagnostics:', {
+    length: rawKey.length,
+    startsWithQuote: rawKey.startsWith('"') || rawKey.startsWith("'"),
+    endsWithQuote: rawKey.endsWith('"') || rawKey.endsWith("'"),
+    startsWithBegin: trimmed.startsWith('-----BEGIN PRIVATE KEY-----'),
+    endsWithEnd: trimmed.endsWith('-----END PRIVATE KEY-----') || trimmed.endsWith('-----END PRIVATE KEY-----\\n'),
+    literalBackslashNCount: (rawKey.match(/\\n/g) || []).length,
+    realNewlineCount: (rawKey.match(/\n/g) || []).length,
+    containsCarriageReturn: rawKey.includes('\r'),
+  });
+
+  const normalizedKey = rawKey.replace(/\\n/g, '\n').trim();
+
   cachedClient = new JWT({
     email,
-    key: rawKey.replace(/\\n/g, '\n'),
+    key: normalizedKey,
     scopes: [
       'https://www.googleapis.com/auth/spreadsheets',
       // drive.file (not full drive access) -- only grants access to files
