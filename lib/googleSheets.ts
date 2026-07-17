@@ -110,7 +110,7 @@ async function authedFetch(url: string, init?: RequestInit): Promise<any> {
   });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`Google API error (${res.status}): ${body}`);
+    throw new Error(`Google API error (${res.status}) on ${init?.method ?? 'GET'} ${url}: ${body}`);
   }
   return res.json();
 }
