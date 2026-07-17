@@ -1,0 +1,8 @@
+node_modules
+.next
+.env
+.env.example
+npm-install.log
+*.log
+tsconfig.tsbuildinfo
+.git

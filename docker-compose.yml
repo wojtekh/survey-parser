@@ -1,0 +1,16 @@
+# Fallback for a plain Docker + nginx host. If deploying via Coolify (see
+# README section 5), this file isn't needed -- Coolify builds straight from
+# the Dockerfile, manages env vars through its own UI, and runs its own
+# proxy, so this and env_file below would be redundant.
+services:
+  survey-parser:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    # Bound to localhost only -- same pattern as Dograh's own containers.
+    # nginx (already running on this box for Dograh) is what actually faces
+    # the internet; this port never needs to be publicly reachable directly.
+    # 3011 picked to avoid clashing with Dograh's own 3010 -- change freely.
+    ports:
+      - "127.0.0.1:3011:3000"
