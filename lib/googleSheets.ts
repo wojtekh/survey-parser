@@ -33,15 +33,23 @@ function getAuthClient(): JWT {
   // to debug env-var corruption between the hosting panel and the running
   // container without printing the key itself anywhere.
   const trimmed = rawKey.trim();
+  const endMarker = '-----END PRIVATE KEY-----';
+  const endIdx = trimmed.indexOf(endMarker);
   console.log('[googleSheets] private key diagnostics:', {
     length: rawKey.length,
     startsWithQuote: rawKey.startsWith('"') || rawKey.startsWith("'"),
     endsWithQuote: rawKey.endsWith('"') || rawKey.endsWith("'"),
     startsWithBegin: trimmed.startsWith('-----BEGIN PRIVATE KEY-----'),
-    endsWithEnd: trimmed.endsWith('-----END PRIVATE KEY-----') || trimmed.endsWith('-----END PRIVATE KEY-----\\n'),
+    endsWithEnd: trimmed.endsWith(endMarker) || trimmed.endsWith(endMarker + '\\n'),
+    endMarkerFound: endIdx !== -1,
+    charsAfterEndMarker: endIdx !== -1 ? trimmed.length - (endIdx + endMarker.length) : null,
     literalBackslashNCount: (rawKey.match(/\\n/g) || []).length,
     realNewlineCount: (rawKey.match(/\n/g) || []).length,
     containsCarriageReturn: rawKey.includes('\r'),
+    // Does another env var's name appear inside this value? Proves line
+    // merging in the hosting panel if true -- names only, no values leaked.
+    containsOtherVarNames: ['GOOGLE_INDEX_SHEET_ID', 'USER_GOOGLE_EMAIL', 'AGENT_TOOLS_SECRET', 'ANTHROPIC_API_KEY']
+      .filter((name) => rawKey.includes(name)),
   });
 
   const normalizedKey = rawKey.replace(/\\n/g, '\n').trim();
