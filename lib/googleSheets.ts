@@ -318,6 +318,55 @@ export async function addSurveyToIndex(entry: SurveyIndexEntry): Promise<void> {
   );
 }
 
+/**
+ * Remove a survey's row from the index sheet's "surveys" tab, matched by
+ * spreadsheetId in column A. Idempotent -- a no-op (not an error) if the
+ * row is already gone, so a retried/duplicate delete call is harmless.
+ */
+export async function removeSurveyFromIndex(spreadsheetId: string): Promise<void> {
+  const indexId = getIndexSheetId();
+
+  const meta = await authedFetch(`${SHEETS_BASE}/${indexId}?fields=sheets.properties`);
+  const sheetMeta = (meta.sheets ?? []).find(
+    (s: any) => s.properties?.title === INDEX_TAB
+  );
+  if (!sheetMeta) return; // no "surveys" tab at all yet -- nothing to remove
+
+  const data = await authedFetch(`${SHEETS_BASE}/${indexId}/values/${INDEX_TAB}!A:A`).catch(
+    () => null
+  );
+  const values: string[][] = data?.values ?? [];
+  // Row 0 is the header ("spreadsheet_id", ...); data starts at row index 1.
+  const rowIndex = values.findIndex((row, i) => i > 0 && row[0] === spreadsheetId);
+  if (rowIndex === -1) return;
+
+  await authedFetch(`${SHEETS_BASE}/${indexId}:batchUpdate`, {
+    method: 'POST',
+    body: JSON.stringify({
+      requests: [
+        {
+          deleteDimension: {
+            range: {
+              sheetId: sheetMeta.properties.sheetId,
+              dimension: 'ROWS',
+              startIndex: rowIndex,
+              endIndex: rowIndex + 1,
+            },
+          },
+        },
+      ],
+    }),
+  });
+}
+
+/** Move a survey's own spreadsheet to Drive Trash (recoverable, not a permanent delete). */
+export async function trashSpreadsheet(spreadsheetId: string): Promise<void> {
+  await authedFetch(`${DRIVE_BASE}/files/${spreadsheetId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ trashed: true }),
+  });
+}
+
 export async function listSurveys(): Promise<SurveyIndexEntry[]> {
   const indexId = getIndexSheetId();
   const data = await authedFetch(`${SHEETS_BASE}/${indexId}/values/${INDEX_TAB}!A2:D10000`).catch(

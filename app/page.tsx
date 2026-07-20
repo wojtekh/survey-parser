@@ -40,6 +40,33 @@ export default function Home() {
   const [pushedUrl, setPushedUrl] = useState<string | null>(null);
   const [pushedId, setPushedId] = useState<string | null>(null);
   const [surveys, setSurveys] = useState<SurveyIndexEntry[] | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function deleteSurvey(spreadsheetId: string, name: string) {
+    if (
+      !window.confirm(
+        `Delete "${name}"? This removes it from the list and moves its Google Sheet to Trash.`
+      )
+    ) {
+      return;
+    }
+
+    setDeletingId(spreadsheetId);
+    setDeleteError(null);
+    try {
+      const res = await fetch(`/api/surveys/${encodeURIComponent(spreadsheetId)}`, {
+        method: 'DELETE',
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? 'Failed to delete survey.');
+      setSurveys((prev) => (prev ? prev.filter((s) => s.spreadsheetId !== spreadsheetId) : prev));
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete survey.');
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   function loadSurveys() {
     fetch('/api/surveys')
@@ -540,13 +567,24 @@ export default function Home() {
                     {s.spreadsheetId} · {s.createdAt ? new Date(s.createdAt).toLocaleString() : ''}
                   </div>
                 </div>
-                <a href={s.url} target="_blank" rel="noreferrer" className="btn">
-                  Open sheet
-                </a>
+                <div className="row" style={{ gap: 8, width: 'auto' }}>
+                  <a href={s.url} target="_blank" rel="noreferrer" className="btn">
+                    Open sheet
+                  </a>
+                  <button
+                    className="btn"
+                    style={{ color: 'var(--danger)' }}
+                    disabled={deletingId === s.spreadsheetId}
+                    onClick={() => deleteSurvey(s.spreadsheetId, s.name)}
+                  >
+                    {deletingId === s.spreadsheetId ? 'Deleting…' : 'Delete'}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
         )}
+        {deleteError && <p className="error-text">{deleteError}</p>}
       </div>
     </>
   );
