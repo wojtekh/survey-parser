@@ -31,6 +31,20 @@ export async function POST(request: Request) {
   const question: string | undefined = body.question;
   const answer: string | undefined = body.answer;
 
+  // Diagnostic: log exactly what Dograh actually sent (not secret material,
+  // just the four fields) whenever validation fails, so a bad template
+  // substitution upstream (e.g. {{workflow_run_id}} rendering empty on a
+  // particular call type) shows up here instead of only as a vague error
+  // the LLM has to improvise around mid-call.
+  if (!conversationId || !rawSpreadsheetId || !question || !answer) {
+    console.log('[record-answer] validation failed, received body:', {
+      conversation_id: conversationId,
+      spreadsheet_id: rawSpreadsheetId,
+      question,
+      answer,
+    });
+  }
+
   if (!conversationId || typeof conversationId !== 'string') {
     return NextResponse.json({ error: 'Missing conversation_id.' }, { status: 400 });
   }
