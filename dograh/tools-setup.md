@@ -89,6 +89,71 @@ logic; call `record_answer` after every question; call `end_call` (with a
 brief closing message and a reason) whenever the document instructs
 terminating the call.
 
+Use this for screeners with skip/termination logic that were **not** parsed
+through the app's "Recruitment / qualifier screener" flow -- e.g. a
+hand-written document, or one you're deliberately keeping ad hoc. The agent
+judges the logic itself from the attached document each turn, which is
+reliable with a clean, explicit script but not deterministic.
+
+---
+
+## Tool 4: get_next_screener_question (deterministic screeners)
+
+For screeners that WERE parsed and pushed through the app's "Recruitment /
+qualifier screener" flow -- the structured question list (with skip_if/
+terminate_if per question) gets saved to that survey's spreadsheet
+automatically on push, in a `screener` tab. This tool reads that structure
+server-side and resolves skip/terminate logic itself, so the agent never
+has to judge it -- it just asks whatever this tool returns. Removes the
+class of failure record_answer's document-based approach can have (an
+agent misjudging a condition, skipping a question it shouldn't have,
+inventing one that isn't in the document).
+
+It also replaces `record_answer` for these screeners -- it logs the
+answer AND decides what's next in the same call, so only one tool is
+needed per turn instead of two.
+
+| Field | Value |
+|---|---|
+| Name | `get_next_screener_question` |
+| Description | "Call this once at the very start of the screener (with no last_question_id/answer) to get the first question, and again immediately after the caller answers each question (passing back the question_id this tool gave you last time, plus their answer) to get the next one. Never decide the next question yourself -- always call this tool. If it returns done=true, stop asking questions: if terminated=true, end the call using closing_message; otherwise read the invitation script under closing and end the call based on their response." |
+| Method | POST |
+| URL | `https://your-deployed-app.example.com/api/agent/next-screener-question` |
+| Custom header | `x-agent-secret` = your `AGENT_TOOLS_SECRET` |
+| Parameters | `conversation_id` (string, required) — "Always pass exactly {{workflow_run_id}}." · `spreadsheet_id` (string, required, Preset Parameter -- literal value, this survey's ID from the app) · `last_question_id` (string, optional) — "The question_id this tool returned last time. Omit on the very first call." · `answer` (string, optional) — "The caller's answer to that question, in their own words. Omit on the very first call." |
+
+**Returns (next question):** `{ done: false, terminated: false, question_id: string, question: string }`
+**Returns (disqualified):** `{ done: true, terminated: true, closing_message: string }`
+**Returns (completed):** `{ done: true, terminated: false, closing: { invitation_script, accept_response, decline_response } }`
+
+Prompt for this kind of agent should tell the LLM to: call this tool to get
+each question (never invent one), ask exactly what it returns (light
+rephrasing for natural speech is fine, don't change the meaning), pass back
+the exact `question_id` and the caller's answer on the next call, and stop
+asking questions the moment `done` is true -- using `closing_message` if
+`terminated`, or reading `closing.invitation_script` and reacting to their
+answer otherwise.
+
+`conversation_id` has been unreliable in practice: `{{workflow_run_id}}`
+resolves to an empty string whether it's an LLM Parameter (the model
+transcribes nothing) or a Preset Parameter (Dograh's preset-template engine
+itself errors out, "resolved to an empty value" -- this happens before the
+tool call even reaches survey-parser). The only configuration confirmed
+working end-to-end (AGO test call, run 47) was `conversation_id` as a
+**Preset Parameter with a fixed literal string**, same as `spreadsheet_id`
+-- e.g. `test-call-1`.
+
+That's fine for one-at-a-time testing but doesn't hold up for real,
+concurrent multi-caller use -- every call would share the same
+conversation_id and their answers would collide in the responses tab
+(worse here than with record_answer, since this tool also uses
+conversation_id to key the in-memory answer-history cache that feeds
+skip/terminate decisions). Untested candidate for a real fix:
+`{{initial_context.phone_number}}` as the preset value, since
+`initial_context.*` is the one template form Dograh's docs actually confirm
+preset parameters support -- worth validating with a real call before
+relying on it in production.
+
 ---
 
 ## Multi-survey: passing spreadsheet_id

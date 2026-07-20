@@ -211,6 +211,59 @@ export async function appendResponse(
   );
 }
 
+const SCREENER_TAB = 'screener';
+
+/**
+ * Persist a screener's full structured question list (skip/terminate/
+ * internal-note logic included) to its own tab as a single JSON string --
+ * this is what lets a Dograh tool call resolve conditional logic
+ * server-side at call time instead of relying on the agent to self-track it
+ * from a rendered script. Sheets cells cap out around 50k characters;
+ * guard against silently truncating a screener that's grown too large.
+ */
+export async function writeScreener(spreadsheetId: string, screener: unknown): Promise<void> {
+  const json = JSON.stringify(screener);
+  if (json.length > 45000) {
+    throw new Error(
+      `Screener JSON is ${json.length} characters, too close to a Google Sheets cell's ~50k limit. Split this screener into smaller documents.`
+    );
+  }
+
+  const meta = await authedFetch(`${SHEETS_BASE}/${spreadsheetId}?fields=sheets.properties.title`);
+  const titles: string[] = (meta.sheets ?? []).map((s: any) => s.properties?.title);
+
+  if (!titles.includes(SCREENER_TAB)) {
+    await authedFetch(`${SHEETS_BASE}/${spreadsheetId}:batchUpdate`, {
+      method: 'POST',
+      body: JSON.stringify({
+        requests: [{ addSheet: { properties: { title: SCREENER_TAB } } }],
+      }),
+    });
+  }
+
+  await authedFetch(
+    `${SHEETS_BASE}/${spreadsheetId}/values/${SCREENER_TAB}!A1?valueInputOption=RAW`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ values: [[json]] }),
+    }
+  );
+}
+
+/** Read back a screener's raw JSON string. Throws if none was ever pushed. */
+export async function getScreenerRaw(spreadsheetId: string): Promise<string> {
+  const data = await authedFetch(`${SHEETS_BASE}/${spreadsheetId}/values/${SCREENER_TAB}!A1`).catch(
+    () => null
+  );
+  const value: string | undefined = data?.values?.[0]?.[0];
+  if (!value) {
+    throw new Error(
+      'No screener data found for this survey. Push it from the survey-parser app first (Push to Google Sheet on a screener-type result).'
+    );
+  }
+  return value;
+}
+
 export interface SurveyIndexEntry {
   spreadsheetId: string;
   name: string;

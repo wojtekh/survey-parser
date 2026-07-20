@@ -89,7 +89,11 @@ export default function Home() {
     }
   }
 
-  async function pushQuestionsToSheet(title: string, questions: string[]) {
+  async function pushQuestionsToSheet(
+    title: string,
+    questions: string[],
+    screenerToPersist?: ParsedScreener
+  ) {
     setPushState('pushing');
     setPushError(null);
 
@@ -97,7 +101,11 @@ export default function Home() {
       const res = await fetch('/api/sheets/push', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ questions, name: title }),
+        body: JSON.stringify({
+          questions,
+          name: title,
+          ...(screenerToPersist ? { screener: screenerToPersist } : {}),
+        }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? 'Failed to push to Google Sheet.');
@@ -470,9 +478,13 @@ export default function Home() {
                 </a>
               </p>
               <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)' }}>
-                Use <code>spreadsheet_id={pushedId}</code> as the record_answer tool&apos;s preset
-                parameter, and upload the exported script below to the agent&apos;s Knowledge
-                Base document (Full Document mode).
+                The structured question list was saved to this sheet&apos;s &quot;screener&quot;
+                tab. Use <code>spreadsheet_id={pushedId}</code> as the
+                get_next_screener_question tool&apos;s preset parameter (see
+                dograh/tools-setup.md) -- it now resolves skip/terminate logic server-side
+                instead of the agent judging it from a script. The exported script below is
+                still useful as the agent&apos;s Knowledge Base document, for phrasing and the
+                opening/closing scripts.
               </p>
             </div>
           )}
@@ -489,7 +501,8 @@ export default function Home() {
               onClick={() =>
                 pushQuestionsToSheet(
                   screener.title,
-                  screener.questions.map((q) => q.text)
+                  screener.questions.map((q) => q.text),
+                  screener
                 )
               }
               disabled={unresolvedCount > 0 || pushState === 'pushing'}
