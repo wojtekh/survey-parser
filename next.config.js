@@ -9,6 +9,19 @@ const nextConfig = {
   experimental: {
     serverComponentsExternalPackages: ['pdf-parse', 'mammoth'],
   },
+  // The build container on the deploy box is memory-constrained (shared with
+  // Dograh's own stack and several other apps) -- Next's in-build
+  // type-check and lint passes are a full separate project traversal on top
+  // of the webpack/SWC compile itself, and have been observed OOM-killing
+  // the build with no readable error (just an abrupt stop after "Creating
+  // an optimized production build..."). Both are redundant with `npx tsc
+  // --noEmit`, which is run locally before every push instead.
+  typescript: {
+    ignoreBuildErrors: true,
+  },
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
 };
 
 module.exports = nextConfig;
