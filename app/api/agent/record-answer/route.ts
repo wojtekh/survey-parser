@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { appendResponse, getAnsweredCount, normalizeSpreadsheetId } from '@/lib/googleSheets';
+import { appendResponse, normalizeSpreadsheetId } from '@/lib/googleSheets';
 import { checkAgentSecret } from '@/lib/checkAgentSecret';
 
 export const runtime = 'nodejs';
@@ -14,12 +14,17 @@ export const runtime = 'nodejs';
 //
 // Unlike submit-answer, the question text is NOT derived server-side --
 // it's whatever the LLM says it just asked, trusted as-is. There's no
-// canonical list to check it against here. questionIndex is just a
-// running "how many answers so far for this conversation" counter (reuses
-// getAnsweredCount), not a position in a known sequence -- kept only so
-// the responses tab's existing 4-column shape (conversation_id,
-// question_index, question, user_response) still works unchanged, and so
-// rows stay in the order they were recorded.
+// canonical list to check it against here.
+//
+// questionIndex here is a server timestamp (ms since epoch), not a running
+// count. This used to be a getAnsweredCount() read (a full Sheets API
+// round-trip over up to 100k rows) done before every append -- purely
+// cosmetic ordering, but it doubled this endpoint's latency and pushed it
+// past Dograh's 5s function-call timeout on a real call (the append itself
+// succeeded, but arrived ~180ms after Dograh had already given up on the
+// tool call and torn down the pipeline). Dropping it to a single Sheets
+// API call (just the append) keeps real margin under that timeout. Rows
+// still sort correctly by this column; it's just no longer a 0-based count.
 export async function POST(request: Request) {
   if (!checkAgentSecret(request)) {
     return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 });
@@ -60,16 +65,14 @@ export async function POST(request: Request) {
   const spreadsheetId = normalizeSpreadsheetId(rawSpreadsheetId);
 
   try {
-    const answeredCount = await getAnsweredCount(spreadsheetId, conversationId);
-
     await appendResponse(spreadsheetId, {
       conversationId,
-      questionIndex: answeredCount,
+      questionIndex: Date.now(),
       question,
       answer,
     });
 
-    return NextResponse.json({ ok: true, recordedIndex: answeredCount });
+    return NextResponse.json({ ok: true });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Failed to record answer.' },
