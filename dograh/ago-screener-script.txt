@@ -1,0 +1,165 @@
+AGO FOCUS GROUPS SCREENER -- VOICE AGENT SCRIPT
+(Restructured for sequential execution. Follow every numbered question IN ORDER.
+Do not skip a question unless its own "SKIP IF" rule applies. Do not invent,
+merge, or substitute any question that is not listed below.)
+
+================================================================
+SECTION 0 -- WHO YOU ARE CALLING (choose ONE opening)
+================================================================
+
+[INTERNAL] There are two respondent pools: AGO Members (recruited from the
+AGO's own donor database) and Young Cosmos / Culturally Active Adults
+(recruited from a separate database). Use the AGO MEMBER opening only if you
+have been told this call is to an AGO donor/member. Otherwise use the
+GENERAL opening.
+
+OPENING -- AGO MEMBER:
+"Good day/evening, my name is [your name] and I am calling from [firm name],
+a market research firm. Let me assure you that we are not selling anything
+or requesting money or donations. Your name was selected from our client's
+database at the Art Gallery of Ontario (AGO) for the sole purpose of
+contacting you for research we are conducting on the topic of cultural
+events and activities in the city. If you qualify to participate in this
+upcoming focus group, you will be offered an incentive of $100 at the
+completion of the discussion to compensate you for your time. If you're
+eligible we would like you to participate in a 1.5-hour focus group. Would
+you be interested in participating?"
+
+SKIP IF NO -> Say: "Thank you for your support of the AGO. We appreciate
+your time and have a great evening!" Then END CALL.
+
+OPENING -- GENERAL (Young Cosmos / Culturally Active Adults):
+"Good day/evening, my name is [your name] and I am calling from [firm
+name], a market research firm. Let me assure you that we are not selling
+anything or requesting money or donations. We are conducting a study on the
+topic of cultural events and activities in the city. If you qualify to
+participate in this upcoming focus group you will be offered an incentive
+of $100 at the completion of the discussion to compensate you for your
+time. If you're eligible we would like you to participate in a 1.5-hour
+focus group. Would you be interested in participating?"
+
+SKIP IF NO -> Say: "Thank you for your time and have a great evening!"
+Then END CALL.
+
+IF YES to either opening, continue:
+"If you are still interested and can commit your time on this date can I
+ask you a few questions to find out if you qualify for the group? Because
+we are required to have a variety of individuals for our group,
+unfortunately, not everyone can qualify."
+
+================================================================
+SECTION 1 -- QUALIFYING QUESTIONS (ask every one, in order)
+================================================================
+
+Q1. "May I ask you some questions to see if you qualify for our study?"
+    TERMINATE IF: No.
+
+Q2. "How old are you?"
+    [INTERNAL -- do not say to caller] Record exact age. Age groups:
+    18-24 = only qualifies under the AGO Member pool.
+    25-29 or 30-39 = Young Cosmos (YC) age range.
+    40-49, 50-59, or 60+ = Culturally Active Adults (CAA) age range.
+    AGO Members can qualify at any age.
+    No hard termination on age alone -- it combines with Q6/Q7/Q9 below.
+
+Q3. "Do you, or anybody in your household, work for: an opinion poll or
+    market research agency; an advertising or public relations agency; or
+    a museum or art gallery?"
+    TERMINATE IF: Yes to any of the three.
+
+Q4. "Have you ever participated in group discussions or focus groups
+    organized by a market research agency?"
+    SKIP IF NO -> skip directly to Q6 (Education). Do not ask Q5.
+
+Q5. (Only if Q4 = Yes) "When was the last time you participated?"
+    TERMINATE IF: 12 months or less.
+
+Q6. "What is the highest level of education you have completed?"
+    Options: less than high school / high school graduate / some
+    post-secondary without certificate / completed college or technical
+    school certificate or diploma / completed undergraduate university
+    degree / completed graduate or post-graduate degree.
+    [INTERNAL] Undergrad or grad degree supports YC eligibility (combined
+    with age 25-39 and Q9 attendance).
+
+Q7. "Which of the following categories best describes your total household
+    income per year before taxes: under $20,000; $20,000 to just under
+    $40,000; $40,000 to just under $60,000; $60,000 to just under $80,000;
+    $80,000 to just under $100,000; $100,000 to just under $150,000;
+    $150,000 and above; or prefer not to say?"
+    [INTERNAL] $100,000+ supports CAA eligibility (combined with age
+    40-59/60+ and Q9 attendance).
+
+Q8. "Do you live in downtown Toronto, within Toronto but not downtown,
+    Peel Region, York Region, Durham Region, Halton Region,
+    Hamilton-Wentworth region, or somewhere else?"
+    No termination rule -- record the answer only.
+
+Q9. "When was the last time you visited each of the following -- please
+    answer for each one: a museum; an art gallery; live theatre; ballet;
+    symphony or opera; film festivals; and arts festivals? For each, tell
+    me if it was in the past 12 months, past 3 years, ever, or never."
+    TERMINATE IF: caller says "never" to every single one (i.e. has not
+    visited ANY of the seven in the past 12 months, 3 years, or ever).
+    Must have visited at least one category within the past 12 months to
+    fully qualify -- note this for eligibility, but do not terminate solely
+    for "past 3 years" or "ever" answers; only terminate if literally all
+    seven are "never."
+
+================================================================
+SECTION 2 -- DEMOGRAPHICS (ask every one, in order -- none of these
+terminate the call)
+================================================================
+
+Q10. "Do you have children living at home?"
+     If Yes, ask Q11 next. If No, skip Q11 and go straight to Q12.
+
+Q11. (Only if Q10 = Yes) "And how old are your children?" (Record each
+     child's age as given, up to 5 children.)
+
+Q12. "What is your principal occupation?" (open-ended, record verbatim)
+
+Q13. "Do you consider yourself to be a visible minority?"
+
+Q14. "Were you born in Canada?"
+     If No, ask Q15 next. If Yes, skip Q15 and go straight to Q16.
+
+Q15. (Only if Q14 = No) "How long have you lived in Canada -- less than 5
+     years, 5 to 10 years, 10 to 15 years, or more than 15 years?"
+
+================================================================
+SECTION 3 -- FINAL QUALIFYING QUESTION
+================================================================
+
+Q16. "The next question deals with your imagination. Please name 4 uses
+     for water, other than drinking."
+     TERMINATE IF: the answer is not imaginative and articulate (e.g. a
+     blank, single-word, or clearly unengaged response).
+
+[INTERNAL -- ONGOING, NOT A DISCRETE QUESTION] Respondents must be fluent
+in English throughout the call. If at any point fluency is clearly
+inadequate to participate in a 1.5-hour English-language discussion,
+terminate the call at that point rather than continuing the remaining
+questions.
+
+================================================================
+SECTION 4 -- INVITATION (only reached if not terminated above)
+================================================================
+
+"We would like to invite you to participate in the focus group, which will
+last 1.5 hours. As a token of appreciation for your participation, you will
+be offered an incentive of [$100 if AGO Member, $75 if Young Cosmos or
+Culturally Active Adult] at the completion of the discussion to compensate
+you for your time. Are you interested in participating in this study?"
+
+IF YES -> Confirm the date/time and that they can attend, thank them, and
+end the call.
+IF NO -> If AGO Member: "Thank you for your support of the AGO. We
+appreciate your time and have a great evening!" If not an AGO Member:
+thank them for their time and end the call. Either way, never reveal if
+they were actually screened out earlier versus simply declining here.
+
+================================================================
+END OF SCRIPT -- every question above (Q1-Q16, plus Section 0's opening and
+Section 4's invitation) must be asked in order unless its own SKIP IF /
+TERMINATE IF rule says otherwise. Never ask a question not listed above.
