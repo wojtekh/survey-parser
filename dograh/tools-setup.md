@@ -178,6 +178,52 @@ whichever is easier in the dashboard at the time.
 
 ---
 
+## Tool 5: check_availability (appointment booking)
+
+Reusable across any agent that needs to offer appointment slots -- nothing
+survey- or screener-specific in it. Requires the Google Calendar setup in
+the main README (Calendar API enabled, calendar scope added to the service
+account's domain-wide delegation) on top of the Sheets setup tools 1-4 use.
+
+| Field | Value |
+|---|---|
+| Name | `check_availability` |
+| Description | "Call this to find open appointment times for a given day before offering any time to the caller. Pass `date` as close to verbatim what the caller said -- 'today', 'tomorrow', a weekday name, or a literal date -- never compute or guess a date yourself. Read out 2-3 of the returned slot labels; don't read the whole list. If none_available is true, offer a different day." |
+| Method | POST |
+| URL | `https://your-deployed-app.example.com/api/agent/check-availability` |
+| Custom header | `x-agent-secret` = your `AGENT_TOOLS_SECRET` |
+| Parameters | `date` (string, required) -- "The day to check, exactly as the caller said it: 'today', 'tomorrow', a weekday name like 'Tuesday' or 'next Tuesday', or YYYY-MM-DD." · `duration_minutes` (number, optional) -- "Appointment length in minutes. Omit to use the default." |
+
+**Returns:** `{ date, time_zone, is_business_day: boolean, slots: [{ label, start_iso, end_iso }], none_available: boolean }`
+
+`label` is spoken-friendly (e.g. `"9:00 AM"`). `start_iso` is what gets
+passed to `book_appointment` -- the agent should never construct or modify
+it, only echo back whichever slot the caller picked.
+
+---
+
+## Tool 6: book_appointment
+
+Pairs with Tool 5.
+
+| Field | Value |
+|---|---|
+| Name | `book_appointment` |
+| Description | "Call this once the caller has confirmed a specific time from check_availability's results and given you their name and a phone number or email. Pass start_iso exactly as returned by check_availability for the slot they picked. If this returns an error about the slot being taken, call check_availability again and offer new times -- don't retry the same start_iso." |
+| Method | POST |
+| URL | `https://your-deployed-app.example.com/api/agent/book-appointment` |
+| Custom header | `x-agent-secret` = your `AGENT_TOOLS_SECRET` |
+| Parameters | `conversation_id` (string, required) -- "Always pass exactly {{workflow_run_id}}." · `start_iso` (string, required) -- "The start_iso value of the slot the caller chose, exactly as check_availability returned it." · `duration_minutes` (number, optional) -- "Should match whatever was passed to check_availability. Omit to use the default." · `name` (string, required) -- "The caller's full name." · `phone` (string, optional) -- "The caller's phone number." · `email` (string, optional) -- "The caller's email, if given -- they'll get a calendar invite if so." · `notes` (string, optional) -- "Anything relevant about the appointment the caller mentioned." |
+
+**Returns (success):** `{ ok: true, event_id, start_iso, end_iso, confirmation }` -- `confirmation` is a spoken-friendly string (e.g. `"Tuesday, March 4 at 9:00 AM (EST)"`) safe to read back to the caller as-is.
+**Returns (slot taken):** HTTP 409, `{ error: "..." }` -- call `check_availability` again rather than retrying.
+
+At least one of `phone` or `email` is required -- the route rejects a
+booking with neither, since there'd be no way to reach the caller about it
+afterward.
+
+---
+
 ## Inbound calls (one number, reassigned per survey)
 
 An inbound call has no `initial_context` -- nobody dials in with a

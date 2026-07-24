@@ -200,6 +200,59 @@ Tool 1/2 pattern -- lower latency, one round-trip per turn.
 
 ---
 
+## Tool 7: check_availability
+
+Appointment booking. Reusable across any agent -- not survey/screener
+specific. Requires the Google Calendar setup in the main README (Calendar
+API enabled + calendar scope added to the service account's domain-wide
+delegation) in addition to the Sheets setup Tools 1-6 use.
+
+| Field | Value |
+|---|---|
+| Name | `check_availability` |
+| Description | Call this to find open appointment times for a given day before offering any time to the caller. Pass `date` as close to verbatim what the caller said -- never compute or guess a date yourself. Read out 2-3 of the returned slot labels, not the whole list. |
+| Method | `POST` |
+| URL | `https://sp.cognexion.com/api/agent/check-availability` |
+| Header | `x-agent-secret` = (see above) |
+
+**LLM Parameters:**
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `date` | string | yes | The day to check, exactly as the caller said it: `today`, `tomorrow`, a weekday name (`Tuesday` / `next Tuesday`), or `YYYY-MM-DD`. Resolved server-side, in `BUSINESS_TIME_ZONE`. |
+| `duration_minutes` | number | no | Appointment length. Omit to use `APPOINTMENT_DURATION_MINUTES`. |
+
+**Returns:** `{ date, time_zone, is_business_day: boolean, slots: [{ label, start_iso, end_iso }], none_available: boolean }`
+
+---
+
+## Tool 8: book_appointment
+
+Pairs with Tool 7.
+
+| Field | Value |
+|---|---|
+| Name | `book_appointment` |
+| Description | Call this once the caller has confirmed a specific time from check_availability's results and given a name and a phone number or email. Pass start_iso exactly as check_availability returned it for the chosen slot. On a "slot taken" error, call check_availability again rather than retrying the same start_iso. |
+| Method | `POST` |
+| URL | `https://sp.cognexion.com/api/agent/book-appointment` |
+| Header | `x-agent-secret` = (see above) |
+
+**LLM Parameters:**
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `conversation_id` | string | yes | Always pass exactly `{{workflow_run_id}}`. |
+| `start_iso` | string | yes | The `start_iso` of the slot the caller chose, exactly as `check_availability` returned it. |
+| `duration_minutes` | number | no | Should match what was passed to `check_availability`. Omit to use the default. |
+| `name` | string | yes | The caller's full name. |
+| `phone` | string | no* | The caller's phone number. *At least one of `phone`/`email` is required. |
+| `email` | string | no* | The caller's email -- triggers a calendar invite if given. |
+| `notes` | string | no | Anything relevant the caller mentioned. |
+
+**Returns (success):** `{ ok: true, event_id, start_iso, end_iso, confirmation }` -- `confirmation` is spoken-friendly (e.g. `"Tuesday, March 4 at 9:00 AM (EST)"`), safe to read back as-is.
+**Returns (slot taken):** HTTP 409 `{ error }` -- re-call `check_availability`, don't retry.
+
+---
+
 ## Which tools go on which agent
 
 | Agent | Tools attached |
@@ -208,6 +261,7 @@ Tool 1/2 pattern -- lower latency, one round-trip per turn.
 | Voice Survey Agent (Inbound) | `get_next_question_inbound`, `submit_answer_inbound` |
 | Complex screener, KB-driven (e.g. AGO) | `record_answer` (+ Knowledge Base document, Full Document mode) |
 | Complex screener, deterministic | `get_next_screener_question` (KB document optional, for tone only) |
+| Any agent that should offer appointment booking | `check_availability`, `book_appointment` -- can be added alongside any of the above |
 
 ---
 
