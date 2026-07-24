@@ -17,13 +17,24 @@ export const runtime = 'nodejs';
 // before booking (a slot offered a few tool-calls ago in the same call
 // could already be taken by then) -- returns 409 rather than silently
 // double-booking if so.
+//
+// conversation_id is NOT required, unlike the survey tools -- it's only
+// used for traceability in the event description (see bookAppointment),
+// nothing here keys off it. Made optional deliberately: {{workflow_run_id}}
+// has the same known-unreliable-template issue documented for record-answer
+// and get_next_screener_question (resolves to an empty string on some
+// calls), and unlike those tools there's no correctness reason to hard-fail
+// a real booking over it -- a slightly less traceable calendar event beats
+// an appointment that silently didn't get booked.
 export async function POST(request: Request) {
   if (!checkAgentSecret(request)) {
     return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 });
   }
 
   const body = await request.json().catch(() => ({}));
-  const conversationId: string | undefined = body.conversation_id;
+  const conversationIdRaw: string | undefined = body.conversation_id;
+  const conversationId: string | undefined =
+    conversationIdRaw && typeof conversationIdRaw === 'string' ? conversationIdRaw : undefined;
   const startISORaw: string | undefined = body.start_iso;
   const name: string | undefined = body.name;
   const phone: string | undefined = body.phone;
@@ -34,9 +45,14 @@ export async function POST(request: Request) {
       ? body.duration_minutes
       : getDefaultDurationMinutes();
 
-  if (!conversationId || typeof conversationId !== 'string') {
-    return NextResponse.json({ error: 'Missing conversation_id.' }, { status: 400 });
+  if (!conversationId) {
+    // Diagnostic only, not a rejection -- see comment above. Worth knowing
+    // if/how often this happens without blocking the booking over it.
+    console.log('[book-appointment] conversation_id missing or empty, proceeding anyway:', {
+      conversation_id: conversationIdRaw,
+    });
   }
+
   if (!name || typeof name !== 'string') {
     return NextResponse.json({ error: 'Missing name.' }, { status: 400 });
   }

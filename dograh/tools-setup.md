@@ -213,7 +213,7 @@ Pairs with Tool 5.
 | Method | POST |
 | URL | `https://your-deployed-app.example.com/api/agent/book-appointment` |
 | Custom header | `x-agent-secret` = your `AGENT_TOOLS_SECRET` |
-| Parameters | `conversation_id` (string, required) -- "Always pass exactly {{workflow_run_id}}." · `start_iso` (string, required) -- "The start_iso value of the slot the caller chose, exactly as check_availability returned it." · `duration_minutes` (number, optional) -- "Should match whatever was passed to check_availability. Omit to use the default." · `name` (string, required) -- "The caller's full name." · `phone` (string, optional) -- "The caller's phone number." · `email` (string, optional) -- "The caller's email, if given -- they'll get a calendar invite if so." · `notes` (string, optional) -- "Anything relevant about the appointment the caller mentioned." |
+| Parameters | `conversation_id` (string, optional) -- "Always pass exactly {{workflow_run_id}} if you have it." · `start_iso` (string, required) -- "The start_iso value of the slot the caller chose, exactly as check_availability returned it." · `duration_minutes` (number, optional) -- "Should match whatever was passed to check_availability. Omit to use the default." · `name` (string, required) -- "The caller's full name." · `phone` (string, optional) -- "The caller's phone number." · `email` (string, optional) -- "The caller's email, if given -- they'll get a calendar invite if so." · `notes` (string, optional) -- "Anything relevant about the appointment the caller mentioned." |
 
 **Returns (success):** `{ ok: true, event_id, start_iso, end_iso, confirmation }` -- `confirmation` is a spoken-friendly string (e.g. `"Tuesday, March 4 at 9:00 AM (EST)"`) safe to read back to the caller as-is.
 **Returns (slot taken):** HTTP 409, `{ error: "..." }` -- call `check_availability` again rather than retrying.
@@ -221,6 +221,13 @@ Pairs with Tool 5.
 At least one of `phone` or `email` is required -- the route rejects a
 booking with neither, since there'd be no way to reach the caller about it
 afterward.
+
+`conversation_id` is deliberately NOT required server-side, unlike the
+survey tools -- same `{{workflow_run_id}}`-resolves-empty issue documented
+for `record_answer`/`get_next_screener_question` above, but here it's only
+used for traceability in the event description, nothing keys off it. The
+route logs when it arrives empty (for visibility) but still books the
+appointment.
 
 ---
 

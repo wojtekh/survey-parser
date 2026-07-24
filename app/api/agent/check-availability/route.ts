@@ -7,11 +7,12 @@ export const runtime = 'nodejs';
 // POST /api/agent/check-availability  { date, duration_minutes? }
 //
 // date: pass through close to verbatim what the caller said -- "today",
-// "tomorrow", a weekday name ("Tuesday" = the next upcoming Tuesday, "next
-// Tuesday" = the one after that), or a literal YYYY-MM-DD. Resolved
-// server-side in BUSINESS_TIME_ZONE via resolveRequestedDate(), not by the
-// LLM doing date arithmetic. duration_minutes defaults to
-// APPOINTMENT_DURATION_MINUTES (30 if unset).
+// "tomorrow", a weekday name ("Tuesday" and "next Tuesday" both mean the
+// nearest upcoming Tuesday -- see resolveRequestedDate's comment for the
+// one edge case where "next" actually adds a week), or a literal
+// YYYY-MM-DD. Resolved server-side in BUSINESS_TIME_ZONE via
+// resolveRequestedDate(), not by the LLM doing date arithmetic.
+// duration_minutes defaults to APPOINTMENT_DURATION_MINUTES (30 if unset).
 //
 // Returns open business-hours slots for that single day, already filtered
 // against the calendar's real busy blocks and against "already in the

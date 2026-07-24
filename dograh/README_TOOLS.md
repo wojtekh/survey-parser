@@ -240,7 +240,7 @@ Pairs with Tool 7.
 **LLM Parameters:**
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `conversation_id` | string | yes | Always pass exactly `{{workflow_run_id}}`. |
+| `conversation_id` | string | no | Always pass exactly `{{workflow_run_id}}` if you have it -- used only for traceability in the event description, the route still books the appointment if this comes through empty (known `{{workflow_run_id}}` reliability issue, same as Tools 5/6 above). |
 | `start_iso` | string | yes | The `start_iso` of the slot the caller chose, exactly as `check_availability` returned it. |
 | `duration_minutes` | number | no | Should match what was passed to `check_availability`. Omit to use the default. |
 | `name` | string | yes | The caller's full name. |

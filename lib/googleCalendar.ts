@@ -139,7 +139,15 @@ export function resolveRequestedDate(raw: string): string {
   if (weekdayIndex !== -1) {
     const targetWeekday = weekdayIndex + 1; // luxon: 1=Monday ... 7=Sunday
     let daysAhead = (targetWeekday - now.weekday + 7) % 7;
-    if (nextMatch) daysAhead += 7; // "next <day>" skips this week's occurrence
+    // "next Tuesday" and plain "Tuesday" both mean the nearest upcoming
+    // Tuesday in the common, colloquial reading -- callers consistently
+    // expect these to match (confirmed against a real test call: "next
+    // Tuesday" said on a Friday was expected to mean 4 days out, not 11).
+    // The one case where "next" actually adds a week: if today itself IS
+    // that weekday, daysAhead comes out 0 -- plain "Tuesday" on a Tuesday
+    // means today, but "next Tuesday" on a Tuesday means a week from now,
+    // not today. That's the only place the "next" prefix changes anything.
+    if (nextMatch && daysAhead === 0) daysAhead = 7;
     return now.plus({ days: daysAhead }).toFormat('yyyy-MM-dd');
   }
 
