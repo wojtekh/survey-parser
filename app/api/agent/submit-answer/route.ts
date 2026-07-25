@@ -4,6 +4,7 @@ import {
   getAllQuestions,
   getAnsweredCount,
   resolveSpreadsheetId,
+  setAnsweredCountCache,
 } from '@/lib/googleSheets';
 import { checkAgentSecret } from '@/lib/checkAgentSecret';
 
@@ -29,6 +30,15 @@ export const runtime = 'nodejs';
 // forever. Returning `next` here means the agent only needs to call
 // next-question ONCE, for the very first question -- every question after
 // that comes from submit-answer's own response, with no second read.
+//
+// Belt-and-suspenders: a live voice agent will sometimes call
+// next-question again anyway despite the prompt saying not to (confirmed
+// on real test calls -- this isn't hypothetical). setAnsweredCountCache
+// below makes that safe too, by updating the in-memory answered-count
+// cache synchronously right after the append succeeds, so even an
+// immediate redundant next-question call reads the correct count instead
+// of racing Sheets. See the comment on answeredCountCache in
+// lib/googleSheets.ts for the full explanation.
 export async function POST(request: Request) {
   if (!checkAgentSecret(request)) {
     return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 });
@@ -75,8 +85,9 @@ export async function POST(request: Request) {
       question,
       answer,
     });
-
     const nextIndex = answeredCount + 1;
+    setAnsweredCountCache(spreadsheetId, conversationId, nextIndex);
+
     const remaining = questions.length - nextIndex;
     const next =
       nextIndex >= questions.length

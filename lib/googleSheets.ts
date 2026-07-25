@@ -187,13 +187,56 @@ export async function getAllQuestions(spreadsheetId: string): Promise<string[]> 
   return values.map((row) => row[0]).filter((v): v is string => Boolean(v));
 }
 
+// In-memory answered-count cache, keyed by `${spreadsheetId}::${conversationId}`.
+// Exists because the Google Sheets API doesn't guarantee read-after-write:
+// appendResponse can return 200 before a `values.get` a few hundred ms
+// later actually sees the new row. In practice this meant get_next_question,
+// called again immediately after submit_answer (something a live voice
+// agent will do sometimes no matter how the prompt says not to -- confirmed
+// on multiple real test calls, not a one-off), would report the count from
+// *before* the answer that was just recorded, and the agent would think the
+// survey reset to question 1. Since this whole app runs as a single
+// long-lived Node process (not multi-instance serverless), a plain in-memory
+// cache gives strict read-your-writes consistency for free: submit_answer
+// updates it synchronously the moment it appends, so any read immediately
+// after -- from this call or a redundant one -- sees the correct count
+// instantly, no Sheets round-trip race possible. Falls back to a live Sheets
+// read on a cache miss (fresh conversation, or a server restart), and
+// self-heals from there since the next submit_answer will populate it.
+const answeredCountCache = new Map<string, number>();
+
+function answeredCountCacheKey(spreadsheetId: string, conversationId: string): string {
+  return `${spreadsheetId}::${conversationId}`;
+}
+
 export async function getAnsweredCount(
   spreadsheetId: string,
   conversationId: string
 ): Promise<number> {
+  const key = answeredCountCacheKey(spreadsheetId, conversationId);
+  const cached = answeredCountCache.get(key);
+  if (cached !== undefined) return cached;
+
   const data = await authedFetch(`${SHEETS_BASE}/${spreadsheetId}/values/responses!A2:A100000`);
   const values: string[][] = data.values ?? [];
-  return values.filter((row) => row[0] === conversationId).length;
+  const count = values.filter((row) => row[0] === conversationId).length;
+  answeredCountCache.set(key, count);
+  return count;
+}
+
+// Called only by submit-answer, right after a successful append -- NOT
+// baked into appendResponse itself, because record-answer also calls
+// appendResponse but passes a timestamp as questionIndex (see that route),
+// not a real answered count, which would poison this cache with garbage
+// values if the write-through happened generically for every caller.
+export function setAnsweredCountCache(
+  spreadsheetId: string,
+  conversationId: string,
+  count: number
+): void {
+  const key = answeredCountCacheKey(spreadsheetId, conversationId);
+  const existing = answeredCountCache.get(key) ?? 0;
+  answeredCountCache.set(key, Math.max(existing, count));
 }
 
 export async function appendResponse(
