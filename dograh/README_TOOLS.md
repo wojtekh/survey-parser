@@ -84,12 +84,13 @@ the next question itself.
 
 ## Tool 2: submit_answer
 
-Pairs with Tool 1.
+Pairs with Tool 1 -- but only for the *first* question. After that, this
+tool alone drives the rest of the survey (see "Corrected flow" below).
 
 | Field | Value |
 |---|---|
 | Name | `submit_answer` |
-| Description | Call this immediately after the caller answers the current question, once you're confident you've captured what they said. Do this every time before calling get_next_question again. |
+| Description | Call this immediately after the caller answers the current question, once you're confident you've captured what they said. Its response tells you the next question directly -- don't call get_next_question again after the first question. |
 | Method | `POST` |
 | URL | `https://sp.cognexion.com/api/agent/submit-answer` |
 | Header | `x-agent-secret` = (see above) |
@@ -105,7 +106,39 @@ Pairs with Tool 1.
 |---|---|
 | `spreadsheet_id` | `{{initial_context.spreadsheet_id}}` -- same as Tool 1, keep in sync. |
 
-**Returns:** `{ ok: boolean, recordedIndex: number, remaining: number }`
+**Returns:** `{ ok: boolean, recordedIndex: number, remaining: number, next: { done: boolean, index: number, question: string | null, total?: number } }`
+
+### Corrected flow -- call get_next_question ONCE, not per-question
+
+Earlier versions had the agent call `get_next_question` again after every
+`submit_answer`, alternating between the two tools per question. **Don't do
+that** -- it hits a real Google Sheets read-after-write race: `submit_answer`
+appends the answer via the Sheets API, then the very next `get_next_question`
+re-reads the same sheet a few hundred ms later to count answered questions,
+and that read can come back stale (append acknowledged, but not yet visible
+to a fresh read). The agent sees "still on question 0" right after it just
+answered question 0, apologizes, and re-asks the same question -- confirmed
+on a live test call (loops indefinitely on question 1 until the caller gives
+up).
+
+The fix: `submit_answer` now computes and returns the next question directly
+in its own response (`next`), from data it already has in memory -- no
+second read, no race. Correct flow:
+
+1. Call `get_next_question` **exactly once**, at the very start of the
+   survey, to get question 1.
+2. Ask it, get the answer, call `submit_answer`.
+3. Read `next` off `submit_answer`'s response. If `next.done`, the survey's
+   over. Otherwise `next.question` **is** the next question -- ask it
+   directly, then call `submit_answer` again for that answer.
+4. Repeat step 3 for every remaining question. Never call `get_next_question`
+   again after step 1.
+
+The agent prompts in `create-agent-request.json` and
+`create-agent-request-inbound.json` (and the `workflow-definition*.json`
+equivalents) already encode this corrected flow -- if you're hand-editing an
+agent's prompt in the dashboard instead of re-uploading, make sure it
+matches this pattern.
 
 ---
 
