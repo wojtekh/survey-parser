@@ -3,13 +3,15 @@ import {
   appendResponse,
   getAllQuestions,
   getAnsweredCount,
-  normalizeSpreadsheetId,
+  resolveSpreadsheetId,
 } from '@/lib/googleSheets';
 import { checkAgentSecret } from '@/lib/checkAgentSecret';
 
 export const runtime = 'nodejs';
 
-// POST /api/agent/submit-answer  { conversation_id, spreadsheet_id, answer }
+// POST /api/agent/submit-answer
+// { conversation_id, spreadsheet_id, answer }  -- outbound
+// { conversation_id, phone_number, answer }     -- inbound
 //
 // spreadsheet_id IS the survey identifier (see next-question route). The
 // index/canonical question text are still derived server-side rather than
@@ -22,20 +24,25 @@ export async function POST(request: Request) {
   const body = await request.json();
   const conversationId: string | undefined = body.conversation_id;
   const rawSpreadsheetId: string | undefined = body.spreadsheet_id;
+  const phoneNumber: string | undefined = body.phone_number;
   const answer: string | undefined = body.answer;
 
   if (!conversationId || typeof conversationId !== 'string') {
     return NextResponse.json({ error: 'Missing conversation_id.' }, { status: 400 });
   }
-  if (!rawSpreadsheetId || typeof rawSpreadsheetId !== 'string') {
-    return NextResponse.json({ error: 'Missing spreadsheet_id.' }, { status: 400 });
+  if (!rawSpreadsheetId && !phoneNumber) {
+    return NextResponse.json({ error: 'Missing spreadsheet_id or phone_number.' }, { status: 400 });
   }
   if (!answer || typeof answer !== 'string') {
     return NextResponse.json({ error: 'Missing answer.' }, { status: 400 });
   }
-  const spreadsheetId = normalizeSpreadsheetId(rawSpreadsheetId);
 
   try {
+    const spreadsheetId = await resolveSpreadsheetId({
+      spreadsheetId: rawSpreadsheetId,
+      phoneNumber,
+    });
+
     const [questions, answeredCount] = await Promise.all([
       getAllQuestions(spreadsheetId),
       getAnsweredCount(spreadsheetId, conversationId),

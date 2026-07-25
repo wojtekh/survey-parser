@@ -14,10 +14,15 @@ Google Sheets.
   survey-parser app -> Environment Variables. Same value on every tool, no
   exceptions. If you don't have a live tool to copy it from anymore, get it
   directly from Coolify.
-- **spreadsheet_id** values are survey-specific and change every time you
-  push a new survey from the app. The ones listed under each tool below are
-  whatever was current as of this doc being written -- check the app's
-  "Past surveys" list for the current one before relying on these.
+- **spreadsheet_id / phone_number**: as of this revision, every tool below
+  uses a **Preset Parameter templated from `initial_context`**
+  (`{{initial_context.spreadsheet_id}}` for outbound, `{{initial_context.
+  called_number}}` for inbound) rather than a literal value -- meaning each
+  tool is created **once, ever**, and works for every survey automatically.
+  Reassigning which survey an inbound number serves happens in
+  survey-parser's "Inbound numbers" section on the home page, not in
+  Dograh. Outbound calls just pass `initial_context: { spreadsheet_id: "..." }`
+  when triggered -- see "Triggering an outbound call" below.
 
 ---
 
@@ -38,7 +43,11 @@ the next question itself.
 | Name | Type | Required | Description |
 |---|---|---|---|
 | `conversation_id` | string | yes | Always pass exactly `{{workflow_run_id}}`. |
-| `spreadsheet_id` | string | yes | Always pass exactly `{{initial_context.spreadsheet_id}}`. |
+
+**Preset Parameters:**
+| Name | Value |
+|---|---|
+| `spreadsheet_id` | `{{initial_context.spreadsheet_id}}` -- template, injected by Dograh directly. Set once; works for every survey triggered with `initial_context: { spreadsheet_id: "..." }`. |
 
 **Returns:** `{ done: boolean, index: number, question: string | null, total?: number }`
 
@@ -60,8 +69,12 @@ Pairs with Tool 1.
 | Name | Type | Required | Description |
 |---|---|---|---|
 | `conversation_id` | string | yes | Always pass exactly `{{workflow_run_id}}`. |
-| `spreadsheet_id` | string | yes | Always pass exactly `{{initial_context.spreadsheet_id}}`. |
 | `answer` | string | yes | The caller's answer to the current question, in their own words. |
+
+**Preset Parameters:**
+| Name | Value |
+|---|---|
+| `spreadsheet_id` | `{{initial_context.spreadsheet_id}}` -- same as Tool 1, keep in sync. |
 
 **Returns:** `{ ok: boolean, recordedIndex: number, remaining: number }`
 
@@ -69,11 +82,13 @@ Pairs with Tool 1.
 
 ## Tool 3: get_next_question_inbound
 
-Same as Tool 1, but for a fixed inbound phone number where there's no
-`initial_context` to carry a spreadsheet_id -- so it's a **Preset
-Parameter** instead, injected by Dograh directly, invisible to the LLM.
-Reassigning the number to a different survey later = editing this one
-preset value, nothing else.
+Same as Tool 1, but for inbound calls -- there's no `initial_context.
+spreadsheet_id` to read (nobody dials in with a survey ID attached), so
+this uses `phone_number` instead, resolved server-side against a mapping
+you manage in survey-parser's "Inbound numbers" section (home page). One
+tool, created once, serves every inbound number and every survey ever
+mapped to one -- reassigning a number to a different survey is a dropdown
+change in the app, not a Dograh edit.
 
 | Field | Value |
 |---|---|
@@ -91,7 +106,7 @@ preset value, nothing else.
 **Preset Parameters:**
 | Name | Value |
 |---|---|
-| `spreadsheet_id` | `1Jro3K_TxIIun-leYw7kspUpMo1cp6Pu_StHyMiGmmSQ` (current simple survey -- check "Past surveys" for the live one) |
+| `phone_number` | `{{initial_context.called_number}}` -- template, the number the caller dialed. Confirmed populated on real inbound calls per Dograh's docs. |
 
 ---
 
@@ -116,7 +131,7 @@ Pairs with Tool 3.
 **Preset Parameters:**
 | Name | Value |
 |---|---|
-| `spreadsheet_id` | Same value as Tool 3, kept identical. |
+| `phone_number` | `{{initial_context.called_number}}` -- same as Tool 3, keep in sync. |
 
 ---
 
@@ -134,7 +149,10 @@ not work in either an LLM Parameter (resolves empty) or a Preset Parameter
 (Dograh's own preset engine throws "resolved to an empty value" before the
 call even reaches survey-parser). The only configuration confirmed working
 end-to-end was a **fixed literal string** as a Preset Parameter -- fine for
-one test call at a time, not for real concurrent multi-caller use.
+one test call at a time, not for real concurrent multi-caller use (every
+call would collide in the responses tab). Still unresolved -- this is
+separate from spreadsheet_id/phone_number resolution below, which now works
+reliably via `initial_context` templates.
 
 | Field | Value |
 |---|---|
@@ -147,14 +165,22 @@ one test call at a time, not for real concurrent multi-caller use.
 **LLM Parameters:**
 | Name | Type | Required | Description |
 |---|---|---|---|
+| `conversation_id` | string | yes | Always pass exactly `{{workflow_run_id}}` (see reliability caveat above -- a fixed literal Preset Parameter is the only thing confirmed to work). |
 | `question` | string | yes | The exact question you just asked the caller, in your own words. |
 | `answer` | string | yes | The caller's answer, in their own words. |
 
-**Preset Parameters:**
+**Preset Parameters (outbound):**
 | Name | Value |
 |---|---|
-| `spreadsheet_id` | This screener's sheet ID, e.g. `1OQv--HB3fZD9dD_0Z6uejyn-_oBJyRbs2vgfNBmRbnw` (AGO) |
-| `conversation_id` | A fixed literal test string, e.g. `test-call-1` -- NOT a template |
+| `spreadsheet_id` | `{{initial_context.spreadsheet_id}}` |
+
+**Preset Parameters (inbound, e.g. AGO):**
+| Name | Value |
+|---|---|
+| `phone_number` | `{{initial_context.called_number}}` -- resolved via survey-parser's inbound number mapping, same as Tools 3/4. |
+
+Use whichever of the two Preset Parameters matches how this screener is
+being called -- not both.
 
 **Returns:** `{ ok: boolean, recordedIndex: number }`
 
@@ -189,10 +215,19 @@ Tool 1/2 pattern -- lower latency, one round-trip per turn.
 | `last_question_id` | string | no | The question_id this tool returned last time. Omit on the very first call. |
 | `answer` | string | no | The caller's answer to that question, in their own words. Omit on the very first call. |
 
-**Preset Parameters:**
+**Preset Parameters (outbound):**
 | Name | Value |
 |---|---|
-| `spreadsheet_id` | This screener's sheet ID (must have been pushed via the app's screener flow, not manually created) |
+| `spreadsheet_id` | `{{initial_context.spreadsheet_id}}` |
+
+**Preset Parameters (inbound):**
+| Name | Value |
+|---|---|
+| `phone_number` | `{{initial_context.called_number}}` -- resolved via survey-parser's inbound number mapping. |
+
+This screener must have been pushed via the app's screener flow (not
+manually created) either way -- that's what persists the structured
+question list this tool reads.
 
 **Returns (next question):** `{ done: false, terminated: false, question_id: string, question: string }`
 **Returns (disqualified):** `{ done: true, terminated: true, closing_message: string }`
@@ -262,6 +297,23 @@ Pairs with Tool 7.
 | Complex screener, KB-driven (e.g. AGO) | `record_answer` (+ Knowledge Base document, Full Document mode) |
 | Complex screener, deterministic | `get_next_screener_question` (KB document optional, for tone only) |
 | Any agent that should offer appointment booking | `check_availability`, `book_appointment` -- can be added alongside any of the above |
+
+---
+
+## Managing inbound number -> survey mappings
+
+survey-parser's home page has an "Inbound numbers" section: lists every
+mapped phone number, which survey it currently points to, a dropdown to
+repoint it, and a form to map a new number. Backed by `/api/inbound-numbers`
+(GET list, POST upsert) and `/api/inbound-numbers/:phoneNumber` (DELETE).
+This is the only place reassignment happens -- no Dograh dashboard work
+needed once the inbound tools above are set up.
+
+If you're not sure what format Dograh sends `called_number` in (e.g.
+`+14165551234` vs `14165551234` vs with dashes), place one real inbound
+call first with the number unmapped -- the resulting error from
+`resolveSpreadsheetId` will include the exact string that was received, so
+you can map it precisely.
 
 ---
 
