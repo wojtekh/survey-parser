@@ -122,7 +122,15 @@ Rules:
    references a quota table you can't fully resolve), add a short note to
    the top-level "flags" array instead of a per-question review_note.
 7. Keep every question's phrasing natural and speakable over the phone,
-   without changing its meaning or the answer options it implies.
+   without changing its meaning or the answer options it implies. If a
+   question offers a SHORT closed set of choices (roughly 8 or fewer), fold
+   them into the spoken question, e.g. "What is your gender -- male,
+   female, gender diverse, or would you prefer not to answer?" If it's a
+   LONG dropdown that's really just a big reference list rather than a
+   meaningful small set (country, city, occupation, or anything with
+   roughly 9+ options), do NOT read the list aloud -- phrase it as a plain
+   open-ended question instead, e.g. a full country dropdown becomes simply
+   "What country do you live in?"
 8. Do not add compliance/legal language, incentive amounts, or other
    specifics that aren't in the source document.
 

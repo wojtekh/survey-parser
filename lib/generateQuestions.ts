@@ -22,9 +22,16 @@ flagging of anything you're unsure about.
 Rules:
 1. Output ONE natural, speakable question per source question -- no
    question IDs, no separate type/choices fields. If the source question has
-   choices (radio/checkbox/"select all that apply"), fold them naturally
-   into the spoken question, e.g. "What gender do you identify as -- female,
-   male, gender diverse, or would you prefer not to say?"
+   a SHORT closed set of choices (roughly 8 or fewer -- radio buttons,
+   "select all that apply", a short dropdown like gender or an income
+   bracket), fold them naturally into the spoken question, e.g. "What
+   gender do you identify as -- female, male, gender diverse, or would you
+   prefer not to say?" If the source question has a LONG dropdown that's
+   really just a big reference list rather than a meaningful small set of
+   choices (country, city, occupation, or anything with roughly 9+ options),
+   do NOT read the list aloud -- ask it as a plain open-ended question
+   instead, e.g. a 195-country dropdown becomes simply "What country were
+   you born in?"
 2. If a ratings TABLE is present (rows = items, columns = a scale), turn
    each row into its own question with the scale folded in, e.g. "On a
    scale of 1 to 5, how motivating are cash payments when deciding to
