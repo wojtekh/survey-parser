@@ -1,5 +1,18 @@
 # Dograh tool setup (one-time, manual)
 
+**This file is superseded by `README_TOOLS.md`** in this same folder --
+that's the actively-maintained, complete reference (exact fields for every
+tool, the corrected conversation_id design, the corrected submit_answer
+flow, step-by-step dashboard instructions). Use this file only for the
+narrative/rationale below; for exact values to type into the dashboard, use
+`README_TOOLS.md` instead. In particular, every `conversation_id` LLM
+Parameter mentioned below (`{{workflow_run_id}}`) is **wrong** --
+`workflow_run_id` isn't a real Dograh variable, and following these
+instructions literally will reproduce the bug documented in
+`README_TOOLS.md`'s "Before you start" section. See that file for the
+correct Preset Parameter values (`{{initial_context.conversation_id}}` for
+outbound, `{{initial_context.caller_number}}` for inbound).
+
 Dograh's public API doesn't currently expose tool creation (only agents,
 campaigns, runs, telephony configs) -- HTTP API tools have to be created once
 in the dashboard. They're generic and reusable across every survey (nothing

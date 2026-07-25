@@ -23,6 +23,28 @@ Google Sheets.
   survey-parser's "Inbound numbers" section on the home page, not in
   Dograh. Outbound calls just pass `initial_context: { spreadsheet_id: "..." }`
   when triggered -- see "Triggering an outbound call" below.
+- **conversation_id: `{{workflow_run_id}}` is NOT a real Dograh variable.**
+  Every tool below used to have the agent pass `conversation_id` as an LLM
+  Parameter with instructions to "always pass exactly `{{workflow_run_id}}`"
+  -- this was based on a wrong assumption that `workflow_run_id` resolves
+  like a real template variable. It doesn't; Dograh's docs confirm the only
+  built-in variables are `{{caller_number}}`/`{{called_number}}`
+  (telephony) and `{{current_time}}`/`{{current_weekday}}` (defaults) --
+  `workflow_run_id` isn't one of them. In practice this meant the LLM was
+  just copying the literal text `{{workflow_run_id}}` into the tool call
+  (confirmed on a live test -- the responses sheet had the literal string
+  `{{workflow_run_id}}` in every row, not a real ID), or sometimes producing
+  an empty string instead -- unreliable either way, confirmed on a second
+  live test where it broke the call outright (`Missing conversation_id`).
+  **Fixed**: `conversation_id` is now also a **Preset Parameter**, not an
+  LLM Parameter, using a variable that's actually real:
+  - Inbound tools: `{{initial_context.caller_number}}` -- free, already
+    populated on every real inbound call, nothing to set up.
+  - Outbound tools: `{{initial_context.conversation_id}}` -- we generate a
+    real UUID and pass it ourselves when triggering the call, same as
+    `spreadsheet_id` (see "Triggering an outbound call" below).
+  The agent no longer needs to know or reference conversation_id at all --
+  same as it already doesn't need to know spreadsheet_id/phone_number.
 
 ## How to create a tool (step by step)
 
@@ -68,15 +90,13 @@ the next question itself.
 | URL | `https://sp.cognexion.com/api/agent/next-question` |
 | Header | `x-agent-secret` = (see above) |
 
-**LLM Parameters:**
-| Name | Type | Required | Description |
-|---|---|---|---|
-| `conversation_id` | string | yes | Always pass exactly `{{workflow_run_id}}`. |
+**LLM Parameters:** none -- the agent doesn't pass anything itself, everything comes from Preset Parameters below.
 
 **Preset Parameters:**
 | Name | Value |
 |---|---|
 | `spreadsheet_id` | `{{initial_context.spreadsheet_id}}` -- template, injected by Dograh directly. Set once; works for every survey triggered with `initial_context: { spreadsheet_id: "..." }`. |
+| `conversation_id` | `{{initial_context.conversation_id}}` -- a real ID you generate and pass yourself when triggering the call (see "Triggering an outbound call" below). Not `{{workflow_run_id}}` -- that isn't a real Dograh variable, see "Before you start" above. |
 
 **Returns:** `{ done: boolean, index: number, question: string | null, total?: number }`
 
@@ -98,13 +118,13 @@ tool alone drives the rest of the survey (see "Corrected flow" below).
 **LLM Parameters:**
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `conversation_id` | string | yes | Always pass exactly `{{workflow_run_id}}`. |
 | `answer` | string | yes | The caller's answer to the current question, in their own words. |
 
 **Preset Parameters:**
 | Name | Value |
 |---|---|
 | `spreadsheet_id` | `{{initial_context.spreadsheet_id}}` -- same as Tool 1, keep in sync. |
+| `conversation_id` | `{{initial_context.conversation_id}}` -- same as Tool 1, keep in sync. |
 
 **Returns:** `{ ok: boolean, recordedIndex: number, remaining: number, next: { done: boolean, index: number, question: string | null, total?: number } }`
 
@@ -160,15 +180,13 @@ change in the app, not a Dograh edit.
 | URL | `https://sp.cognexion.com/api/agent/next-question` |
 | Header | `x-agent-secret` = (see above) |
 
-**LLM Parameters:**
-| Name | Type | Required | Description |
-|---|---|---|---|
-| `conversation_id` | string | yes | Always pass exactly `{{workflow_run_id}}`. |
+**LLM Parameters:** none -- the agent doesn't pass anything itself, everything comes from Preset Parameters below.
 
 **Preset Parameters:**
 | Name | Value |
 |---|---|
 | `phone_number` | `{{initial_context.called_number}}` -- template, the number the caller dialed. Confirmed populated on real inbound calls per Dograh's docs. |
+| `conversation_id` | `{{initial_context.caller_number}}` -- the caller's own number, also auto-populated on every real inbound call. Free, reliable, nothing to set up. Not `{{workflow_run_id}}` -- see "Before you start" above. |
 
 ---
 
@@ -187,13 +205,13 @@ Pairs with Tool 3.
 **LLM Parameters:**
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `conversation_id` | string | yes | Always pass exactly `{{workflow_run_id}}`. |
 | `answer` | string | yes | The caller's answer to the current question, in their own words. |
 
 **Preset Parameters:**
 | Name | Value |
 |---|---|
 | `phone_number` | `{{initial_context.called_number}}` -- same as Tool 3, keep in sync. |
+| `conversation_id` | `{{initial_context.caller_number}}` -- same as Tool 3, keep in sync. |
 
 ---
 
@@ -206,15 +224,11 @@ the document's own skip/termination logic itself. This tool just logs each
 every screener built this way -- only the Knowledge Base document and the
 agent are per-screener, not this tool.
 
-**Known reliability issue:** `conversation_id` as `{{workflow_run_id}}` does
-not work in either an LLM Parameter (resolves empty) or a Preset Parameter
-(Dograh's own preset engine throws "resolved to an empty value" before the
-call even reaches survey-parser). The only configuration confirmed working
-end-to-end was a **fixed literal string** as a Preset Parameter -- fine for
-one test call at a time, not for real concurrent multi-caller use (every
-call would collide in the responses tab). Still unresolved -- this is
-separate from spreadsheet_id/phone_number resolution below, which now works
-reliably via `initial_context` templates.
+**conversation_id fix applied:** same as Tools 1-4 -- `conversation_id` is a
+Preset Parameter now, not an LLM Parameter, using `{{initial_context.
+conversation_id}}` (outbound) or `{{initial_context.caller_number}}`
+(inbound) instead of the non-existent `{{workflow_run_id}}`. See "Before you
+start" above for why the old approach was unreliable.
 
 | Field | Value |
 |---|---|
@@ -227,7 +241,6 @@ reliably via `initial_context` templates.
 **LLM Parameters:**
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `conversation_id` | string | yes | Always pass exactly `{{workflow_run_id}}` (see reliability caveat above -- a fixed literal Preset Parameter is the only thing confirmed to work). |
 | `question` | string | yes | The exact question you just asked the caller, in your own words. |
 | `answer` | string | yes | The caller's answer, in their own words. |
 
@@ -235,14 +248,16 @@ reliably via `initial_context` templates.
 | Name | Value |
 |---|---|
 | `spreadsheet_id` | `{{initial_context.spreadsheet_id}}` |
+| `conversation_id` | `{{initial_context.conversation_id}}` |
 
 **Preset Parameters (inbound, e.g. AGO):**
 | Name | Value |
 |---|---|
 | `phone_number` | `{{initial_context.called_number}}` -- resolved via survey-parser's inbound number mapping, same as Tools 3/4. |
+| `conversation_id` | `{{initial_context.caller_number}}` |
 
-Use whichever of the two Preset Parameters matches how this screener is
-being called -- not both.
+Use whichever pair of Preset Parameters matches how this screener is being
+called -- not both.
 
 **Returns:** `{ ok: boolean, recordedIndex: number }`
 
@@ -273,7 +288,6 @@ Tool 1/2 pattern -- lower latency, one round-trip per turn.
 **LLM Parameters:**
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `conversation_id` | string | yes | Always pass exactly `{{workflow_run_id}}`. Same reliability caveat as Tool 5 applies -- verify this actually resolves on a real test call before relying on it. |
 | `last_question_id` | string | no | The question_id this tool returned last time. Omit on the very first call. |
 | `answer` | string | no | The caller's answer to that question, in their own words. Omit on the very first call. |
 
@@ -281,11 +295,13 @@ Tool 1/2 pattern -- lower latency, one round-trip per turn.
 | Name | Value |
 |---|---|
 | `spreadsheet_id` | `{{initial_context.spreadsheet_id}}` |
+| `conversation_id` | `{{initial_context.conversation_id}}` |
 
 **Preset Parameters (inbound):**
 | Name | Value |
 |---|---|
 | `phone_number` | `{{initial_context.called_number}}` -- resolved via survey-parser's inbound number mapping. |
+| `conversation_id` | `{{initial_context.caller_number}}` |
 
 This screener must have been pushed via the app's screener flow (not
 manually created) either way -- that's what persists the structured
@@ -337,13 +353,18 @@ Pairs with Tool 7.
 **LLM Parameters:**
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `conversation_id` | string | no | Always pass exactly `{{workflow_run_id}}` if you have it -- used only for traceability in the event description, the route still books the appointment if this comes through empty (known `{{workflow_run_id}}` reliability issue, same as Tools 5/6 above). |
 | `start_iso` | string | yes | The `start_iso` of the slot the caller chose, exactly as `check_availability` returned it. |
 | `duration_minutes` | number | no | Should match what was passed to `check_availability`. Omit to use the default. |
 | `name` | string | yes | The caller's full name. |
 | `phone` | string | no* | The caller's phone number. *At least one of `phone`/`email` is required. |
 | `email` | string | no* | The caller's email -- triggers a calendar invite if given. |
 | `notes` | string | no | Anything relevant the caller mentioned. |
+
+Optional: add a `conversation_id` Preset Parameter (`{{initial_context.
+conversation_id}}` or `{{initial_context.caller_number}}`, matching whichever
+survey tools this agent also uses) purely for traceability in the booking's
+event description -- not required, the route books the appointment fine
+without it.
 
 **Returns (success):** `{ ok: true, event_id, start_iso, end_iso, confirmation }` -- `confirmation` is spoken-friendly (e.g. `"Tuesday, March 4 at 9:00 AM (EST)"`), safe to read back as-is.
 **Returns (slot taken):** HTTP 409 `{ error }` -- re-call `check_availability`, don't retry.
@@ -381,21 +402,34 @@ you can map it precisely.
 
 ## Triggering an outbound call
 
+`conversation_id` must be a real, unique value you generate yourself here --
+every outbound trigger needs a fresh one (a UUID is fine, doesn't need to be
+anything meaningful), so that concurrent calls don't collide in the
+responses sheet:
+
 ```
 curl -X POST https://voice.cognexion.com/api/v1/public/agent/workflow/<AGENT_UUID> \
   -H "X-API-Key: <your Dograh API key>" \
   -H "Content-Type: application/json" \
   --data '{
     "phone_number": "+1XXXXXXXXXX",
-    "initial_context": { "spreadsheet_id": "<this survey's spreadsheet_id>" }
+    "initial_context": {
+      "spreadsheet_id": "<this survey's spreadsheet_id>",
+      "conversation_id": "'"$(uuidgen)"'"
+    }
   }'
 ```
+
+(`uuidgen` is a shell command, available by default on macOS/Linux -- swap
+in whatever UUID generator your actual trigger system uses, e.g.
+`crypto.randomUUID()` in Node, `uuid.uuid4()` in Python.)
 
 `<AGENT_UUID>` is the agent's Agent UUID (not its numeric #N id) -- find it
 via the workflow editor's `...` menu -> "Copy Agent UUID", or the agent's
 Settings page. Only needed for outbound agents; inbound agents are
 triggered by a real call landing on whatever number is pointed at them in
-Dograh's `/telephony-configurations`.
+Dograh's `/telephony-configurations`, and get `conversation_id` for free
+from `{{initial_context.caller_number}}` -- nothing to generate.
 
 ## Creating an agent via the API
 
