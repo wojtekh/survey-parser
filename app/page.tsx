@@ -19,6 +19,12 @@ interface SurveyIndexEntry {
   createdAt: string;
 }
 
+interface InboundMapping {
+  phoneNumber: string;
+  spreadsheetId: string;
+  updatedAt: string;
+}
+
 export default function Home() {
   const [name, setName] = useState('');
   const [file, setFile] = useState<File | null>(null);
@@ -42,6 +48,65 @@ export default function Home() {
   const [surveys, setSurveys] = useState<SurveyIndexEntry[] | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Inbound number -> survey mappings ("one number, reassigned per
+  // survey" -- and now, since Dograh's inbound tools resolve spreadsheet_id
+  // from phone_number server-side, reassigning is purely an edit here, no
+  // Dograh tool config ever needs touching).
+  const [inboundMappings, setInboundMappings] = useState<InboundMapping[] | null>(null);
+  const [newNumber, setNewNumber] = useState('');
+  const [newNumberSurveyId, setNewNumberSurveyId] = useState('');
+  const [savingNumber, setSavingNumber] = useState<string | null>(null); // phoneNumber being saved/removed
+  const [inboundError, setInboundError] = useState<string | null>(null);
+
+  function loadInboundMappings() {
+    fetch('/api/inbound-numbers')
+      .then((res) => res.json())
+      .then((body) => setInboundMappings(body.mappings ?? []))
+      .catch(() => setInboundMappings([]));
+  }
+
+  async function saveInboundMapping(phoneNumber: string, spreadsheetId: string) {
+    if (!phoneNumber.trim() || !spreadsheetId) return;
+    setSavingNumber(phoneNumber);
+    setInboundError(null);
+    try {
+      const res = await fetch('/api/inbound-numbers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone_number: phoneNumber.trim(), spreadsheet_id: spreadsheetId }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? 'Failed to save mapping.');
+      loadInboundMappings();
+      setNewNumber('');
+      setNewNumberSurveyId('');
+    } catch (err) {
+      setInboundError(err instanceof Error ? err.message : 'Failed to save mapping.');
+    } finally {
+      setSavingNumber(null);
+    }
+  }
+
+  async function removeInboundNumber(phoneNumber: string) {
+    if (!window.confirm(`Unmap ${phoneNumber}? Inbound calls to this number will fail until it's reassigned.`)) {
+      return;
+    }
+    setSavingNumber(phoneNumber);
+    setInboundError(null);
+    try {
+      const res = await fetch(`/api/inbound-numbers/${encodeURIComponent(phoneNumber)}`, {
+        method: 'DELETE',
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? 'Failed to remove mapping.');
+      setInboundMappings((prev) => (prev ? prev.filter((m) => m.phoneNumber !== phoneNumber) : prev));
+    } catch (err) {
+      setInboundError(err instanceof Error ? err.message : 'Failed to remove mapping.');
+    } finally {
+      setSavingNumber(null);
+    }
+  }
 
   async function deleteSurvey(spreadsheetId: string, name: string) {
     if (
@@ -77,6 +142,7 @@ export default function Home() {
 
   useEffect(() => {
     loadSurveys();
+    loadInboundMappings();
   }, []);
 
   function resetResults() {
@@ -585,6 +651,96 @@ export default function Home() {
           </div>
         )}
         {deleteError && <p className="error-text">{deleteError}</p>}
+      </div>
+
+      <div className="stack">
+        <h2 style={{ fontSize: 16, margin: 0 }}>Inbound numbers</h2>
+        <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0 }}>
+          Which survey each inbound phone number is currently pointed at. Reassigning a number
+          to a new survey is just changing it here -- no Dograh tool config needs touching, as
+          long as the inbound tools use <code>phone_number</code> (
+          <code>{'{{initial_context.called_number}}'}</code>) as their Preset Parameter instead
+          of a literal spreadsheet_id.
+        </p>
+
+        {inboundError && <p className="error-text">{inboundError}</p>}
+
+        {inboundMappings === null ? (
+          <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Loading…</p>
+        ) : inboundMappings.length === 0 ? (
+          <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+            No numbers mapped yet -- add one below.
+          </p>
+        ) : (
+          <div className="stack" style={{ gap: 8 }}>
+            {inboundMappings.map((m) => {
+              const survey = surveys?.find((s) => s.spreadsheetId === m.spreadsheetId);
+              const busy = savingNumber === m.phoneNumber;
+              return (
+                <div key={m.phoneNumber} className="question-item row">
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>{m.phoneNumber}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                      {survey ? survey.name : m.spreadsheetId}
+                      {m.updatedAt ? ` · updated ${new Date(m.updatedAt).toLocaleString()}` : ''}
+                    </div>
+                  </div>
+                  <div className="row" style={{ gap: 8, width: 'auto' }}>
+                    <select
+                      value={m.spreadsheetId}
+                      disabled={busy || !surveys}
+                      onChange={(e) => saveInboundMapping(m.phoneNumber, e.target.value)}
+                      style={{ width: 220 }}
+                    >
+                      {surveys?.map((s) => (
+                        <option key={s.spreadsheetId} value={s.spreadsheetId}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="btn"
+                      style={{ color: 'var(--danger)' }}
+                      disabled={busy}
+                      onClick={() => removeInboundNumber(m.phoneNumber)}
+                    >
+                      {busy ? '…' : 'Unmap'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="card row" style={{ gap: 8 }}>
+          <input
+            type="text"
+            placeholder="Phone number, e.g. +14165551234"
+            value={newNumber}
+            onChange={(e) => setNewNumber(e.target.value)}
+            style={{ flex: 1 }}
+          />
+          <select
+            value={newNumberSurveyId}
+            onChange={(e) => setNewNumberSurveyId(e.target.value)}
+            style={{ width: 220 }}
+          >
+            <option value="">Select a survey…</option>
+            {surveys?.map((s) => (
+              <option key={s.spreadsheetId} value={s.spreadsheetId}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+          <button
+            className="btn btn-primary"
+            disabled={!newNumber.trim() || !newNumberSurveyId || savingNumber === newNumber}
+            onClick={() => saveInboundMapping(newNumber, newNumberSurveyId)}
+          >
+            {savingNumber === newNumber ? 'Adding…' : 'Add'}
+          </button>
+        </div>
       </div>
     </>
   );

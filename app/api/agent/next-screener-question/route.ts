@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server';
-import { appendResponse, normalizeSpreadsheetId } from '@/lib/googleSheets';
+import { appendResponse, resolveSpreadsheetId } from '@/lib/googleSheets';
 import { checkAgentSecret } from '@/lib/checkAgentSecret';
 import { getCachedScreener, getHistory, recordHistory, decideNext } from '@/lib/screenerRuntime';
 
 export const runtime = 'nodejs';
 
 // POST /api/agent/next-screener-question
-// { conversation_id, spreadsheet_id, last_question_id?, answer? }
+// { conversation_id, spreadsheet_id, last_question_id?, answer? }  -- outbound
+// { conversation_id, phone_number, last_question_id?, answer? }     -- inbound
 //
 // Deterministic counterpart to record_answer for screeners parsed and
 // pushed through the app's "Recruitment / qualifier screener" flow (which
@@ -30,18 +31,22 @@ export async function POST(request: Request) {
   const body = await request.json();
   const conversationId: string | undefined = body.conversation_id;
   const rawSpreadsheetId: string | undefined = body.spreadsheet_id;
+  const phoneNumber: string | undefined = body.phone_number;
   const lastQuestionId: string | undefined = body.last_question_id;
   const answer: string | undefined = body.answer;
 
   if (!conversationId || typeof conversationId !== 'string') {
     return NextResponse.json({ error: 'Missing conversation_id.' }, { status: 400 });
   }
-  if (!rawSpreadsheetId || typeof rawSpreadsheetId !== 'string') {
-    return NextResponse.json({ error: 'Missing spreadsheet_id.' }, { status: 400 });
+  if (!rawSpreadsheetId && !phoneNumber) {
+    return NextResponse.json({ error: 'Missing spreadsheet_id or phone_number.' }, { status: 400 });
   }
-  const spreadsheetId = normalizeSpreadsheetId(rawSpreadsheetId);
 
   try {
+    const spreadsheetId = await resolveSpreadsheetId({
+      spreadsheetId: rawSpreadsheetId,
+      phoneNumber,
+    });
     const screener = await getCachedScreener(spreadsheetId);
 
     // First call: no prior question to record, just hand back Q1.

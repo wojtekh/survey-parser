@@ -384,4 +384,199 @@ export async function listSurveys(): Promise<SurveyIndexEntry[]> {
     .reverse(); // newest first
 }
 
+const INBOUND_TAB = 'inbound_numbers';
+
+export interface InboundMapping {
+  phoneNumber: string;
+  spreadsheetId: string;
+  updatedAt: string;
+}
+
+/**
+ * Which survey is currently "live" for a given inbound phone number.
+ * Lets one small set of inbound Dograh tools serve every survey ever
+ * created -- Dograh injects {{initial_context.called_number}} as a Preset
+ * Parameter (populated from real telephony data on production inbound
+ * calls, confirmed in Dograh's own docs), survey-parser resolves which
+ * spreadsheet that number is currently pointed at. Reassigning a number to
+ * a new survey is just updating this mapping -- no Dograh tool config ever
+ * needs touching again.
+ *
+ * Lives as its own tab on the same index sheet as the "surveys" tab, same
+ * lazy-create-if-missing pattern as ensureIndexHeader.
+ */
+async function ensureInboundHeader(): Promise<void> {
+  const indexId = getIndexSheetId();
+
+  const meta = await authedFetch(`${SHEETS_BASE}/${indexId}?fields=sheets.properties.title`);
+  const titles: string[] = (meta.sheets ?? []).map((s: any) => s.properties?.title);
+
+  if (!titles.includes(INBOUND_TAB)) {
+    await authedFetch(`${SHEETS_BASE}/${indexId}:batchUpdate`, {
+      method: 'POST',
+      body: JSON.stringify({
+        requests: [{ addSheet: { properties: { title: INBOUND_TAB } } }],
+      }),
+    });
+  }
+
+  const data = await authedFetch(`${SHEETS_BASE}/${indexId}/values/${INBOUND_TAB}!A1:C1`).catch(
+    () => null
+  );
+  if (data?.values?.length) return;
+
+  await authedFetch(`${SHEETS_BASE}/${indexId}/values/${INBOUND_TAB}!A1:C1?valueInputOption=RAW`, {
+    method: 'PUT',
+    body: JSON.stringify({ values: [['phone_number', 'spreadsheet_id', 'updated_at']] }),
+  });
+}
+
+// Process-lifetime cache -- a live call can hit getActiveSurveyForNumber
+// once per turn (via resolveSpreadsheetId in every agent route); without
+// this, that's a full Sheets read every single turn just to re-learn a
+// mapping that essentially never changes mid-call. Same latency lesson as
+// record-answer's earlier Dograh 5s-timeout incident. Invalidated
+// explicitly on write (set/remove), not by TTL -- this data changes rarely
+// and deliberately (an admin action), so staleness isn't a real risk.
+const inboundMappingCache = new Map<string, string | null>();
+
+/** Which spreadsheet is currently live for this phone number, or null if unmapped. */
+export async function getActiveSurveyForNumber(phoneNumber: string): Promise<string | null> {
+  if (inboundMappingCache.has(phoneNumber)) {
+    return inboundMappingCache.get(phoneNumber)!;
+  }
+
+  const indexId = getIndexSheetId();
+  const data = await authedFetch(`${SHEETS_BASE}/${indexId}/values/${INBOUND_TAB}!A2:C10000`).catch(
+    () => null
+  );
+  const values: string[][] = data?.values ?? [];
+  const row = values.find((r) => r[0] === phoneNumber);
+  const resolved = row?.[1] ?? null;
+  inboundMappingCache.set(phoneNumber, resolved);
+  return resolved;
+}
+
+/** Point a phone number at a survey -- creates the mapping if new, updates it if it already exists. */
+export async function setActiveSurveyForNumber(
+  phoneNumber: string,
+  spreadsheetId: string
+): Promise<void> {
+  await ensureInboundHeader();
+  const indexId = getIndexSheetId();
+
+  const data = await authedFetch(`${SHEETS_BASE}/${indexId}/values/${INBOUND_TAB}!A2:C10000`).catch(
+    () => null
+  );
+  const values: string[][] = data?.values ?? [];
+  const rowIndex = values.findIndex((r) => r[0] === phoneNumber);
+  const updatedAt = new Date().toISOString();
+
+  if (rowIndex === -1) {
+    await authedFetch(
+      `${SHEETS_BASE}/${indexId}/values/${INBOUND_TAB}!A:C:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ values: [[phoneNumber, spreadsheetId, updatedAt]] }),
+      }
+    );
+    inboundMappingCache.set(phoneNumber, spreadsheetId);
+    return;
+  }
+
+  // +2: header row (1) plus values[] being 0-indexed from A2.
+  const sheetRow = rowIndex + 2;
+  await authedFetch(
+    `${SHEETS_BASE}/${indexId}/values/${INBOUND_TAB}!A${sheetRow}:C${sheetRow}?valueInputOption=RAW`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ values: [[phoneNumber, spreadsheetId, updatedAt]] }),
+    }
+  );
+  inboundMappingCache.set(phoneNumber, spreadsheetId);
+}
+
+/** Unmap a phone number entirely. Idempotent -- a no-op if it wasn't mapped. */
+export async function removeInboundMapping(phoneNumber: string): Promise<void> {
+  const indexId = getIndexSheetId();
+
+  const meta = await authedFetch(`${SHEETS_BASE}/${indexId}?fields=sheets.properties`);
+  const sheetMeta = (meta.sheets ?? []).find((s: any) => s.properties?.title === INBOUND_TAB);
+  if (!sheetMeta) {
+    inboundMappingCache.delete(phoneNumber);
+    return;
+  }
+
+  const data = await authedFetch(`${SHEETS_BASE}/${indexId}/values/${INBOUND_TAB}!A:A`).catch(
+    () => null
+  );
+  const values: string[][] = data?.values ?? [];
+  const rowIndex = values.findIndex((row, i) => i > 0 && row[0] === phoneNumber);
+  if (rowIndex === -1) {
+    inboundMappingCache.delete(phoneNumber);
+    return;
+  }
+
+  await authedFetch(`${SHEETS_BASE}/${indexId}:batchUpdate`, {
+    method: 'POST',
+    body: JSON.stringify({
+      requests: [
+        {
+          deleteDimension: {
+            range: {
+              sheetId: sheetMeta.properties.sheetId,
+              dimension: 'ROWS',
+              startIndex: rowIndex,
+              endIndex: rowIndex + 1,
+            },
+          },
+        },
+      ],
+    }),
+  });
+  inboundMappingCache.delete(phoneNumber);
+}
+
+export async function listInboundMappings(): Promise<InboundMapping[]> {
+  const indexId = getIndexSheetId();
+  const data = await authedFetch(`${SHEETS_BASE}/${indexId}/values/${INBOUND_TAB}!A2:C10000`).catch(
+    () => null
+  );
+  const values: string[][] = data?.values ?? [];
+  return values
+    .filter((row) => row[0])
+    .map((row) => ({
+      phoneNumber: row[0],
+      spreadsheetId: row[1] ?? '',
+      updatedAt: row[2] ?? '',
+    }));
+}
+
+/**
+ * Resolve which spreadsheet an agent-facing route should act on. Accepts
+ * either directly (the outbound calling convention -- spreadsheet_id passed
+ * straight through from initial_context) or a phone_number to look up (the
+ * inbound calling convention -- see getActiveSurveyForNumber above). Used
+ * uniformly across next-question, submit-answer, record-answer, and
+ * next-screener-question so all four support both conventions the same way.
+ */
+export async function resolveSpreadsheetId(input: {
+  spreadsheetId?: string | null;
+  phoneNumber?: string | null;
+}): Promise<string> {
+  if (input.spreadsheetId) {
+    return normalizeSpreadsheetId(input.spreadsheetId);
+  }
+  if (input.phoneNumber) {
+    const resolved = await getActiveSurveyForNumber(input.phoneNumber);
+    if (!resolved) {
+      throw new Error(
+        `No survey is currently mapped to phone number "${input.phoneNumber}". Set one in survey-parser's Inbound Numbers section.`
+      );
+    }
+    return normalizeSpreadsheetId(resolved);
+  }
+  throw new Error('Missing spreadsheet_id or phone_number.');
+}
+
 export { normalizeSpreadsheetId };

@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
-import { appendResponse, normalizeSpreadsheetId } from '@/lib/googleSheets';
+import { appendResponse, resolveSpreadsheetId } from '@/lib/googleSheets';
 import { checkAgentSecret } from '@/lib/checkAgentSecret';
 
 export const runtime = 'nodejs';
 
-// POST /api/agent/record-answer  { conversation_id, spreadsheet_id, question, answer }
+// POST /api/agent/record-answer
+// { conversation_id, spreadsheet_id, question, answer }  -- outbound
+// { conversation_id, phone_number, question, answer }     -- inbound
 //
 // For surveys with real branching/skip/termination logic, driven by a
 // Dograh Knowledge Base document rather than our own flat "questions" tab
@@ -33,18 +35,20 @@ export async function POST(request: Request) {
   const body = await request.json();
   const conversationId: string | undefined = body.conversation_id;
   const rawSpreadsheetId: string | undefined = body.spreadsheet_id;
+  const phoneNumber: string | undefined = body.phone_number;
   const question: string | undefined = body.question;
   const answer: string | undefined = body.answer;
 
   // Diagnostic: log exactly what Dograh actually sent (not secret material,
-  // just the four fields) whenever validation fails, so a bad template
+  // just the relevant fields) whenever validation fails, so a bad template
   // substitution upstream (e.g. {{workflow_run_id}} rendering empty on a
   // particular call type) shows up here instead of only as a vague error
   // the LLM has to improvise around mid-call.
-  if (!conversationId || !rawSpreadsheetId || !question || !answer) {
+  if (!conversationId || (!rawSpreadsheetId && !phoneNumber) || !question || !answer) {
     console.log('[record-answer] validation failed, received body:', {
       conversation_id: conversationId,
       spreadsheet_id: rawSpreadsheetId,
+      phone_number: phoneNumber,
       question,
       answer,
     });
@@ -53,8 +57,8 @@ export async function POST(request: Request) {
   if (!conversationId || typeof conversationId !== 'string') {
     return NextResponse.json({ error: 'Missing conversation_id.' }, { status: 400 });
   }
-  if (!rawSpreadsheetId || typeof rawSpreadsheetId !== 'string') {
-    return NextResponse.json({ error: 'Missing spreadsheet_id.' }, { status: 400 });
+  if (!rawSpreadsheetId && !phoneNumber) {
+    return NextResponse.json({ error: 'Missing spreadsheet_id or phone_number.' }, { status: 400 });
   }
   if (!question || typeof question !== 'string') {
     return NextResponse.json({ error: 'Missing question.' }, { status: 400 });
@@ -62,9 +66,13 @@ export async function POST(request: Request) {
   if (!answer || typeof answer !== 'string') {
     return NextResponse.json({ error: 'Missing answer.' }, { status: 400 });
   }
-  const spreadsheetId = normalizeSpreadsheetId(rawSpreadsheetId);
 
   try {
+    const spreadsheetId = await resolveSpreadsheetId({
+      spreadsheetId: rawSpreadsheetId,
+      phoneNumber,
+    });
+
     await appendResponse(spreadsheetId, {
       conversationId,
       questionIndex: Date.now(),

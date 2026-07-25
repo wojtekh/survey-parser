@@ -29,7 +29,8 @@ If you set `AGENT_TOOLS_SECRET` in `.env`, add it as a custom header on
 | Description | "Call this at the start of the survey and again immediately after each answer is recorded, to find out what to ask next. Never guess the next question yourself -- always call this tool." |
 | Method | GET |
 | URL | `https://your-deployed-app.example.com/api/agent/next-question` |
-| Parameters | `conversation_id` (string, required) — "The unique ID for this call. Always pass exactly {{workflow_run_id}}." · `spreadsheet_id` (string, required) — "Which survey this call is for. Always pass exactly {{initial_context.spreadsheet_id}}." |
+| LLM Parameters | `conversation_id` (string, required) — "The unique ID for this call. Always pass exactly {{workflow_run_id}}." |
+| Preset Parameters | `spreadsheet_id` = `{{initial_context.spreadsheet_id}}` -- template, not a literal. Injected directly by Dograh, not typed by the LLM, so it's more reliable than making this an LLM Parameter. Works for any outbound call that sets `initial_context: { spreadsheet_id: "..." }` when triggered -- one tool, every survey, forever. For inbound use, see the Inbound calls section below instead (different tool, keyed by phone number). |
 
 **Returns:** `{ done: boolean, index: number, question: string \| null, total?: number }`
 
@@ -45,7 +46,8 @@ If `done` is `true`, there are no more questions -- move on to ending the call.
 | Description | "Call this immediately after the caller answers the current question, once you're confident you've captured what they said. Do this every time before calling get_next_question again." |
 | Method | POST |
 | URL | `https://your-deployed-app.example.com/api/agent/submit-answer` |
-| Parameters | `conversation_id` (string, required) — "Always pass exactly {{workflow_run_id}}." · `spreadsheet_id` (string, required) — "Always pass exactly {{initial_context.spreadsheet_id}}." · `answer` (string, required) — "The caller's answer to the current question, in their own words." |
+| LLM Parameters | `conversation_id` (string, required) — "Always pass exactly {{workflow_run_id}}." · `answer` (string, required) — "The caller's answer to the current question, in their own words." |
+| Preset Parameters | `spreadsheet_id` = `{{initial_context.spreadsheet_id}}` -- same as Tool 1, keep both in sync. |
 
 **Returns:** `{ ok: boolean, recordedIndex: number, remaining: number }`
 
@@ -79,7 +81,9 @@ needs its own agent, but that agent points at this same tool.
 | Method | POST |
 | URL | `https://your-deployed-app.example.com/api/agent/record-answer` |
 | Custom header | `x-agent-secret` = your `AGENT_TOOLS_SECRET` |
-| Parameters | `conversation_id` (string, required) — "Always pass exactly {{workflow_run_id}}." · `spreadsheet_id` (string, required) — "Always pass exactly {{spreadsheet_id}}." · `question` (string, required) — "The exact question you just asked the caller, in your own words." · `answer` (string, required) — "The caller's answer, in their own words." |
+| LLM Parameters | `conversation_id` (string, required) — "Always pass exactly {{workflow_run_id}}." · `question` (string, required) — "The exact question you just asked the caller, in your own words." · `answer` (string, required) — "The caller's answer, in their own words." |
+| Preset Parameters (outbound) | `spreadsheet_id` = `{{initial_context.spreadsheet_id}}` |
+| Preset Parameters (inbound) | `phone_number` = `{{initial_context.called_number}}` -- resolved server-side against the mapping in survey-parser's "Inbound numbers" section. Use this instead of `spreadsheet_id` for a screener served over a fixed inbound number. |
 
 **Returns:** `{ ok: boolean, recordedIndex: number }`
 
@@ -120,7 +124,9 @@ needed per turn instead of two.
 | Method | POST |
 | URL | `https://your-deployed-app.example.com/api/agent/next-screener-question` |
 | Custom header | `x-agent-secret` = your `AGENT_TOOLS_SECRET` |
-| Parameters | `conversation_id` (string, required) — "Always pass exactly {{workflow_run_id}}." · `spreadsheet_id` (string, required, Preset Parameter -- literal value, this survey's ID from the app) · `last_question_id` (string, optional) — "The question_id this tool returned last time. Omit on the very first call." · `answer` (string, optional) — "The caller's answer to that question, in their own words. Omit on the very first call." |
+| LLM Parameters | `conversation_id` (string, required) — "Always pass exactly {{workflow_run_id}}." · `last_question_id` (string, optional) — "The question_id this tool returned last time. Omit on the very first call." · `answer` (string, optional) — "The caller's answer to that question, in their own words. Omit on the very first call." |
+| Preset Parameters (outbound) | `spreadsheet_id` = `{{initial_context.spreadsheet_id}}` |
+| Preset Parameters (inbound) | `phone_number` = `{{initial_context.called_number}}` -- same lookup as `record_answer` above. |
 
 **Returns (next question):** `{ done: false, terminated: false, question_id: string, question: string }`
 **Returns (disqualified):** `{ done: true, terminated: true, closing_message: string }`
@@ -148,11 +154,14 @@ concurrent multi-caller use -- every call would share the same
 conversation_id and their answers would collide in the responses tab
 (worse here than with record_answer, since this tool also uses
 conversation_id to key the in-memory answer-history cache that feeds
-skip/terminate decisions). Untested candidate for a real fix:
-`{{initial_context.phone_number}}` as the preset value, since
-`initial_context.*` is the one template form Dograh's docs actually confirm
-preset parameters support -- worth validating with a real call before
-relying on it in production.
+skip/terminate decisions). Note this is a genuinely separate problem from
+`spreadsheet_id`/`phone_number` above -- don't reuse `{{initial_context.
+called_number}}` for `conversation_id` too, since concurrent calls to the
+same inbound number need distinct conversation_ids but should resolve to
+the same spreadsheet_id. Still unresolved; worth testing whether Dograh
+exposes any other per-call unique identifier in `initial_context` on real
+inbound/outbound calls before relying on this tool for concurrent,
+production multi-caller use.
 
 ---
 
@@ -160,14 +169,15 @@ relying on it in production.
 
 `spreadsheet_id` isn't a fixed value -- it's the ID of whichever survey's
 spreadsheet this particular call is for (the ID you get back after pushing a
-document in the app, shown on the survey's card in "Past surveys"). This
-needs to reach the agent as an `initial_context` variable when the call is
-triggered/routed, e.g. when placing an outbound call via the API or Dograh
-SDK, pass `initial_context: { spreadsheet_id: "..." }` alongside the call
-request. For inbound calls tied to a specific phone number, check whether
-that phone number's config supports setting a default `initial_context` --
-otherwise each survey effectively needs its own inbound number, or an
-outbound-triggered flow instead.
+document in the app, shown on the survey's card in "Past surveys"). For
+outbound calls, it reaches the agent as an `initial_context` variable set
+when the call is triggered -- pass `initial_context: { spreadsheet_id: "..." }`
+alongside the call request, and the tools above (Preset Parameter
+`{{initial_context.spreadsheet_id}}`) resolve it automatically. One tool
+set, reused for every survey forever -- nothing to recreate per document.
+
+For inbound calls, there's no `initial_context` to set (nobody dials in
+with a spreadsheet_id attached) -- see "Inbound calls" below instead.
 
 ---
 
@@ -231,18 +241,22 @@ appointment.
 
 ---
 
-## Inbound calls (one number, reassigned per survey)
+## Inbound calls (phone_number -> spreadsheet_id, resolved server-side)
 
-An inbound call has no `initial_context` -- nobody dials in with a
-`spreadsheet_id` attached -- so the outbound tools above (which rely on
-Dograh filling `{{spreadsheet_id}}` into the LLM's tool call) don't work
-for inbound. Since it's one phone number reassigned to whichever survey is
-currently live, the fix is a **separate, permanent pair of inbound tools**
-where `spreadsheet_id` is a fixed **Preset Parameter** instead of an LLM
-parameter -- Dograh injects it directly, bypassing the LLM, so it works
-with zero context. Reassigning the number to a new survey later is just
-editing that one preset value -- no new tools, no new agent, nothing to
-touch on the phone number config again.
+An inbound call has no `initial_context.spreadsheet_id` -- nobody dials in
+with a survey ID attached -- so the outbound tools above don't work as-is
+for inbound. Dograh's docs confirm production inbound calls DO populate
+`initial_context.called_number` (and `caller_number`) from real telephony
+data though, so the fix is: inbound tools pass `phone_number` as a Preset
+Parameter instead of `spreadsheet_id`, and survey-parser resolves which
+survey that number is currently mapped to, server-side (see
+`resolveSpreadsheetId` in `lib/googleSheets.ts`).
+
+This means: **one set of inbound tools, created once, ever.** Reassigning a
+number to a new survey -- or adding a second number running a different
+survey at the same time -- happens entirely inside survey-parser's
+"Inbound numbers" section on the home page. No Dograh tool config, no new
+tools, no new agent, nothing to touch in Dograh at all after initial setup.
 
 ### One-time setup
 
@@ -252,23 +266,23 @@ touch on the phone number config again.
    - LLM Parameters: only `conversation_id` (string, required) --
      "Always pass exactly {{workflow_run_id}}." Do **not** add
      `spreadsheet_id` here.
-   - Preset Parameters: `spreadsheet_id` = the ID of whichever survey
-     should currently be live for inbound callers.
+   - Preset Parameters: `phone_number` = `{{initial_context.called_number}}`
    - Save, note the tool UUID (shown in the URL bar on the tool's page).
 
 2. **Create `submit_answer_inbound`** the same way:
    - Method: POST, URL: `https://<your-domain>/api/agent/submit-answer`
    - Same header.
    - LLM Parameters: `conversation_id` and `answer` only.
-   - Preset Parameters: same `spreadsheet_id` value as above.
+   - Preset Parameters: same `phone_number` = `{{initial_context.called_number}}`.
 
 3. **Create the inbound agent.** `workflow-definition-inbound.json` in
    this folder is the same shape as the outbound one, but the prompt
-   doesn't reference `spreadsheet_id` at all (the LLM never sees it --
-   it's injected automatically). Paste the two tool UUIDs from steps 1-2
-   into its `tool_uuids` array, then either upload it via the dashboard's
-   "Upload Agent Definition", or use `create-agent-request-inbound.json`
-   (same fix applied, `tool_uuids` filled in) with the API:
+   doesn't reference `spreadsheet_id` or `phone_number` at all (the LLM
+   never sees either -- both are resolved automatically server-side).
+   Paste the two tool UUIDs from steps 1-2 into its `tool_uuids` array,
+   then either upload it via the dashboard's "Upload Agent Definition", or
+   use `create-agent-request-inbound.json` (same fix applied, `tool_uuids`
+   filled in) with the API:
    ```
    curl -X POST https://<your-dograh-domain>/api/v1/workflow/create/definition \
      -H "X-API-Key: <your Dograh API key>" \
@@ -279,16 +293,20 @@ touch on the phone number config again.
 4. **Point the phone number at it.** In Dograh's `/telephony-configurations`,
    edit the number and set its **Inbound workflow** to this new agent.
 
+5. **Map the number to a survey.** In survey-parser, scroll to "Inbound
+   numbers", enter the phone number (in whatever format Dograh's
+   `called_number` actually sends -- check a real call's logs if unsure)
+   and pick the survey from the dropdown, then Add. Until a number has a
+   mapping, inbound calls to it will get a clear error instead of silently
+   running the wrong survey.
+
 ### Reassigning to a new survey later
 
-No new tools, no new agent -- just:
+No Dograh dashboard work at all -- in survey-parser's "Inbound numbers"
+section, change that number's dropdown to the new survey. Takes effect on
+the very next call (there's an in-memory cache on the resolution, but it's
+invalidated the moment you save a change).
 
-1. Get the new survey's `spreadsheet_id` (shown on its card under "Past
-   surveys" in the app).
-2. Edit `get_next_question_inbound`'s Preset Parameter `spreadsheet_id`
-   to that value.
-3. Edit `submit_answer_inbound`'s Preset Parameter `spreadsheet_id` to
-   the same value.
-
-That's it -- the same phone number, same agent, same tools now serve the
-new survey.
+The same pattern applies to `record_answer` and `get_next_screener_question`
+for inbound complex screeners -- use `phone_number` as their Preset
+Parameter instead of a literal `spreadsheet_id`, same as above.

@@ -21,8 +21,8 @@
           "wait_for_user_response": true,
           "allow_interrupt": true,
           "tool_uuids": [
-            "REPLACE_WITH_GET_NEXT_QUESTION_INBOUND_TOOL_UUID",
-            "REPLACE_WITH_SUBMIT_ANSWER_INBOUND_TOOL_UUID"
+            "88fc2f9e-671a-4a7c-bbb8-5ebcc1ec2232",
+            "0d32e5cb-e948-4955-bd06-7360acd58c43"
           ]
         }
       },
