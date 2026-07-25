@@ -3,6 +3,7 @@ import { getAllQuestions, getAnsweredCount, resolveSpreadsheetId } from '@/lib/g
 import { checkAgentSecret } from '@/lib/checkAgentSecret';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 // GET /api/agent/next-question?conversation_id=xxx&spreadsheet_id=xxx
 //                          or  ?conversation_id=xxx&phone_number=xxx

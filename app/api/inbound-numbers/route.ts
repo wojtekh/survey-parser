@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { listInboundMappings, setActiveSurveyForNumber, normalizeSpreadsheetId } from '@/lib/googleSheets';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 // GET /api/inbound-numbers -- every phone_number -> spreadsheet_id mapping,
 // from the index sheet's "inbound_numbers" tab.

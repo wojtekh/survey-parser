@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { listSurveys } from '@/lib/googleSheets';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 // GET /api/surveys -- every survey ever pushed, from the index sheet.
 // This is "the way to store the survey link/reference" -- read straight

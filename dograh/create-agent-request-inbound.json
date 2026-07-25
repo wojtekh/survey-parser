@@ -21,8 +21,8 @@
           "wait_for_user_response": true,
           "allow_interrupt": true,
           "tool_uuids": [
-            "88fc2f9e-671a-4a7c-bbb8-5ebcc1ec2232",
-            "0d32e5cb-e948-4955-bd06-7360acd58c43"
+            "f2ba280d-b239-4665-a577-4f6c78a572f4",
+            "32a89fe0-fc5c-42c1-9bef-ef08ba17ce8e"
           ]
         }
       },
