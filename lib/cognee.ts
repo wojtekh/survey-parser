@@ -243,9 +243,14 @@ export async function rememberDocument(
   form.append('datasetName', datasetName ?? 'main_dataset');
   form.append('run_in_background', 'false');
 
+  // Agent API keys (from /agents/create) are NOT interchangeable with the
+  // "Authorization: Bearer <token>" scheme used for user login sessions --
+  // that returned a 401 every time, even for a key minted seconds earlier.
+  // Confirmed empirically against the live server: the same key gets 401 as
+  // "Authorization: Bearer" and 200 as "X-Api-Key".
   await cogneeFetch('/api/v1/remember', {
     method: 'POST',
-    headers: { Authorization: `Bearer ${agentApiKey}` },
+    headers: { 'X-Api-Key': agentApiKey },
     body: form,
   });
 }
