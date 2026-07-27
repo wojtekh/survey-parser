@@ -76,7 +76,22 @@ export function decryptSecret(encoded: string): string {
 }
 
 async function cogneeFetch(path: string, init?: RequestInit): Promise<any> {
-  const res = await fetch(`${getApiUrl()}${path}`, init);
+  const url = `${getApiUrl()}${path}`;
+  let res: Response;
+  try {
+    res = await fetch(url, init);
+  } catch (err) {
+    // Node's fetch throws a generic "fetch failed" here for any
+    // network-level problem (DNS, connection refused, TLS) and buries the
+    // real reason in `.cause` -- surface it so this doesn't turn into an
+    // undebuggable "fetch failed" toast in the UI again.
+    const cause = (err as any)?.cause;
+    const causeMsg = cause instanceof Error ? cause.message : cause ? String(cause) : null;
+    throw new Error(
+      `Could not reach Cognee at ${url}${causeMsg ? ` (${causeMsg})` : ''}. ` +
+        `Check COGNEE_API_URL and that cognee-backend's domain is live in Coolify.`
+    );
+  }
   const text = await res.text();
   let body: any = null;
   try {
