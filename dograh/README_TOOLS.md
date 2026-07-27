@@ -38,8 +38,13 @@ Google Sheets.
   live test where it broke the call outright (`Missing conversation_id`).
   **Fixed**: `conversation_id` is now also a **Preset Parameter**, not an
   LLM Parameter, using a variable that's actually real:
-  - Inbound tools: `{{initial_context.caller_number}}` -- free, already
-    populated on every real inbound call, nothing to set up.
+  - Inbound tools: `{{initial_context.caller_number}}-{{current_time}}` --
+    `caller_number` alone is free and populated on every real inbound call,
+    but it's scoped to the phone number, not the individual call -- two
+    different calls from the same number (a different person, or the same
+    person calling back) would otherwise share one conversation_id and
+    collide in the responses sheet. Appending `current_time` (a Dograh
+    default variable, resolved fresh to the second) makes it call-scoped.
   - Outbound tools: `{{initial_context.conversation_id}}` -- we generate a
     real UUID and pass it ourselves when triggering the call, same as
     `spreadsheet_id` (see "Triggering an outbound call" below).
@@ -186,7 +191,7 @@ change in the app, not a Dograh edit.
 | Name | Value |
 |---|---|
 | `phone_number` | `{{initial_context.called_number}}` -- template, the number the caller dialed. Confirmed populated on real inbound calls per Dograh's docs. |
-| `conversation_id` | `{{initial_context.caller_number}}` -- the caller's own number, also auto-populated on every real inbound call. Free, reliable, nothing to set up. Not `{{workflow_run_id}}` -- see "Before you start" above. |
+| `conversation_id` | `{{initial_context.caller_number}}-{{current_time}}` -- **not just `caller_number` alone.** Two different calls from the same phone number (a different person using it, or the same person calling back later) would otherwise share one conversation_id and their answers would collide in the responses sheet -- confirmed as a real gap, not hypothetical. Appending `current_time` (a Dograh default variable, resolved fresh per call to the second) makes it call-scoped instead of number-scoped. **Verify this actually resolves** on your first real test call afterward -- check the responses sheet's conversation_id column contains a real timestamp, not the literal text `{{current_time}}` unresolved (Preset Parameters have only been confirmed to reliably resolve `{{initial_context.*}}` fields so far, not the separate "default variables" -- if it doesn't resolve, fall back to a Pre-Call Data Fetch generating a real UUID into initial_context instead, same pattern outbound calls already use for spreadsheet_id/conversation_id). |
 
 ---
 
@@ -211,7 +216,7 @@ Pairs with Tool 3.
 | Name | Value |
 |---|---|
 | `phone_number` | `{{initial_context.called_number}}` -- same as Tool 3, keep in sync. |
-| `conversation_id` | `{{initial_context.caller_number}}` -- same as Tool 3, keep in sync. |
+| `conversation_id` | `{{initial_context.caller_number}}-{{current_time}}` -- same as Tool 3, keep in sync. |
 
 ---
 
@@ -254,7 +259,7 @@ start" above for why the old approach was unreliable.
 | Name | Value |
 |---|---|
 | `phone_number` | `{{initial_context.called_number}}` -- resolved via survey-parser's inbound number mapping, same as Tools 3/4. |
-| `conversation_id` | `{{initial_context.caller_number}}` |
+| `conversation_id` | `{{initial_context.caller_number}}-{{current_time}}` -- see the call-collision note on Tool 3/4's conversation_id above; same fix applies here. |
 
 Use whichever pair of Preset Parameters matches how this screener is being
 called -- not both.
@@ -301,7 +306,7 @@ Tool 1/2 pattern -- lower latency, one round-trip per turn.
 | Name | Value |
 |---|---|
 | `phone_number` | `{{initial_context.called_number}}` -- resolved via survey-parser's inbound number mapping. |
-| `conversation_id` | `{{initial_context.caller_number}}` |
+| `conversation_id` | `{{initial_context.caller_number}}-{{current_time}}` -- see the call-collision note on Tool 3/4's conversation_id above; same fix applies here. |
 
 This screener must have been pushed via the app's screener flow (not
 manually created) either way -- that's what persists the structured
@@ -429,7 +434,9 @@ via the workflow editor's `...` menu -> "Copy Agent UUID", or the agent's
 Settings page. Only needed for outbound agents; inbound agents are
 triggered by a real call landing on whatever number is pointed at them in
 Dograh's `/telephony-configurations`, and get `conversation_id` for free
-from `{{initial_context.caller_number}}` -- nothing to generate.
+from `{{initial_context.caller_number}}-{{current_time}}` -- nothing to
+generate, just make sure the Preset Parameter includes both, not
+`caller_number` alone (see "Before you start").
 
 ## Creating an agent via the API
 

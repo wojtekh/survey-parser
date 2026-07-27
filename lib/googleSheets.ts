@@ -1,4 +1,5 @@
 import { JWT } from 'google-auth-library';
+import { randomUUID } from 'crypto';
 
 // Multi-survey design: every survey gets its OWN spreadsheet (created from
 // scratch, shared with you automatically), and the spreadsheet's own ID
@@ -252,6 +253,126 @@ export async function appendResponse(
       }),
     }
   );
+}
+
+/**
+ * Write every answer for a call in a single Sheets API call instead of one
+ * append per question. Used by the hybrid gathered_context flow (sync-call
+ * route) -- the whole point of that design is one write at the end of the
+ * call instead of N sequential ones, so this is the piece that actually
+ * delivers on that (a single request also means there's no read-after-write
+ * race to worry about at all, unlike the per-question flow).
+ */
+export async function appendResponsesBatch(
+  spreadsheetId: string,
+  rows: { conversationId: string; questionIndex: number; question: string; answer: string }[]
+): Promise<void> {
+  if (rows.length === 0) return;
+  await authedFetch(
+    `${SHEETS_BASE}/${spreadsheetId}/values/responses!A:D:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        values: rows.map((r) => [r.conversationId, r.questionIndex, r.question, r.answer]),
+      }),
+    }
+  );
+}
+
+// Confirmed-answer cache for the hybrid gathered_context flow: fields the
+// agent explicitly validated mid-call (via validate_field) are stashed here,
+// keyed by spreadsheetId+conversationId, so the end-of-call sync-call route
+// can prefer a validated/normalized value over the raw (never re-checked)
+// gathered_context value for the same field. Same single-process in-memory
+// assumption as answeredCountCache above -- fine for this deployment, would
+// need a shared store if this app ever runs as multiple instances.
+const confirmedAnswerCache = new Map<string, Map<string, string>>();
+
+function confirmedAnswerCacheKey(spreadsheetId: string, conversationId: string): string {
+  return `${spreadsheetId}::${conversationId}`;
+}
+
+export function recordConfirmedAnswer(
+  spreadsheetId: string,
+  conversationId: string,
+  fieldKey: string,
+  normalizedValue: string
+): void {
+  const key = confirmedAnswerCacheKey(spreadsheetId, conversationId);
+  const existing = confirmedAnswerCache.get(key) ?? new Map<string, string>();
+  existing.set(fieldKey, normalizedValue);
+  confirmedAnswerCache.set(key, existing);
+}
+
+export function getConfirmedAnswers(
+  spreadsheetId: string,
+  conversationId: string
+): Map<string, string> {
+  return confirmedAnswerCache.get(confirmedAnswerCacheKey(spreadsheetId, conversationId)) ?? new Map();
+}
+
+/** Called once sync-call has written everything, so the cache doesn't grow unbounded across calls. */
+export function clearConfirmedAnswers(spreadsheetId: string, conversationId: string): void {
+  confirmedAnswerCache.delete(confirmedAnswerCacheKey(spreadsheetId, conversationId));
+}
+
+const FIELDS_TAB = 'fields';
+
+export interface SurveyField {
+  /** Stable slug used as both the gathered_context variable name and the sync-call payload key -- e.g. "first_name", "q7". */
+  key: string;
+  /** Original question text, for the sheet's question column and the agent's prompt. */
+  question: string;
+  fieldType: 'email' | 'phone' | 'date' | 'text';
+  /** True if this field needs the validate_field round trip mid-call rather than passive extraction alone. */
+  validated: boolean;
+}
+
+/**
+ * Persist a survey's field list (key/question/type/validated-or-not) for the
+ * hybrid gathered_context flow -- mirrors writeScreener's pattern (one JSON
+ * blob in its own tab) since this is the same kind of "structured data a
+ * Dograh-facing route needs to read back at call time" as the screener
+ * tab, just a flatter shape (no skip/terminate logic, just field metadata).
+ */
+export async function writeFields(spreadsheetId: string, fields: SurveyField[]): Promise<void> {
+  const json = JSON.stringify(fields);
+  if (json.length > 45000) {
+    throw new Error(
+      `Fields JSON is ${json.length} characters, too close to a Google Sheets cell's ~50k limit. Split this survey into smaller documents.`
+    );
+  }
+
+  const meta = await authedFetch(`${SHEETS_BASE}/${spreadsheetId}?fields=sheets.properties.title`);
+  const titles: string[] = (meta.sheets ?? []).map((s: any) => s.properties?.title);
+
+  if (!titles.includes(FIELDS_TAB)) {
+    await authedFetch(`${SHEETS_BASE}/${spreadsheetId}:batchUpdate`, {
+      method: 'POST',
+      body: JSON.stringify({
+        requests: [{ addSheet: { properties: { title: FIELDS_TAB } } }],
+      }),
+    });
+  }
+
+  await authedFetch(`${SHEETS_BASE}/${spreadsheetId}/values/${FIELDS_TAB}!A1?valueInputOption=RAW`, {
+    method: 'PUT',
+    body: JSON.stringify({ values: [[json]] }),
+  });
+}
+
+/** Read back a survey's field list. Throws if none was ever pushed. */
+export async function getFields(spreadsheetId: string): Promise<SurveyField[]> {
+  const data = await authedFetch(`${SHEETS_BASE}/${spreadsheetId}/values/${FIELDS_TAB}!A1`).catch(
+    () => null
+  );
+  const value: string | undefined = data?.values?.[0]?.[0];
+  if (!value) {
+    throw new Error(
+      'No field data found for this survey. Push it from survey-parser using the gathered_context flow first.'
+    );
+  }
+  return JSON.parse(value) as SurveyField[];
 }
 
 const SCREENER_TAB = 'screener';
@@ -620,6 +741,209 @@ export async function resolveSpreadsheetId(input: {
     return normalizeSpreadsheetId(resolved);
   }
   throw new Error('Missing spreadsheet_id or phone_number.');
+}
+
+const CLIENTS_TAB = 'clients';
+
+export interface ClientAgent {
+  name: string;
+  agentId: string;
+  agentEmail: string;
+  apiKeyEnc: string;
+}
+
+export type KbStatus = 'none' | 'pending' | 'provisioned' | 'error';
+
+export interface Client {
+  clientId: string;
+  name: string;
+  contactEmail: string;
+  contactPhone: string;
+  kbEnabled: boolean;
+  kbStatus: KbStatus;
+  cogneeUserEmail: string | null;
+  cogneePasswordEnc: string | null;
+  agents: ClientAgent[];
+  createdAt: string;
+  updatedAt: string;
+  lastError: string | null;
+}
+
+const CLIENTS_HEADER = [
+  'client_id',
+  'name',
+  'contact_email',
+  'contact_phone',
+  'kb_enabled',
+  'kb_status',
+  'cognee_user_email',
+  'cognee_password_enc',
+  'agents_json',
+  'created_at',
+  'updated_at',
+  'last_error',
+];
+
+/**
+ * Lives on the same index sheet as "surveys"/"inbound_numbers" -- clients
+ * are a cross-cutting concept, not tied to any one survey's own spreadsheet.
+ * Same lazy-create-tab-with-header pattern as ensureIndexHeader /
+ * ensureInboundHeader above.
+ */
+async function ensureClientsHeader(): Promise<void> {
+  const indexId = getIndexSheetId();
+
+  const meta = await authedFetch(`${SHEETS_BASE}/${indexId}?fields=sheets.properties.title`);
+  const titles: string[] = (meta.sheets ?? []).map((s: any) => s.properties?.title);
+
+  if (!titles.includes(CLIENTS_TAB)) {
+    await authedFetch(`${SHEETS_BASE}/${indexId}:batchUpdate`, {
+      method: 'POST',
+      body: JSON.stringify({
+        requests: [{ addSheet: { properties: { title: CLIENTS_TAB } } }],
+      }),
+    });
+  }
+
+  const data = await authedFetch(`${SHEETS_BASE}/${indexId}/values/${CLIENTS_TAB}!A1:L1`).catch(
+    () => null
+  );
+  if (data?.values?.length) return;
+
+  await authedFetch(`${SHEETS_BASE}/${indexId}/values/${CLIENTS_TAB}!A1:L1?valueInputOption=RAW`, {
+    method: 'PUT',
+    body: JSON.stringify({ values: [CLIENTS_HEADER] }),
+  });
+}
+
+function rowToClient(row: string[]): Client {
+  return {
+    clientId: row[0] ?? '',
+    name: row[1] ?? '',
+    contactEmail: row[2] ?? '',
+    contactPhone: row[3] ?? '',
+    kbEnabled: row[4] === 'TRUE',
+    kbStatus: (row[5] as KbStatus) || 'none',
+    cogneeUserEmail: row[6] || null,
+    cogneePasswordEnc: row[7] || null,
+    agents: row[8] ? (JSON.parse(row[8]) as ClientAgent[]) : [],
+    createdAt: row[9] ?? '',
+    updatedAt: row[10] ?? '',
+    lastError: row[11] || null,
+  };
+}
+
+function clientToRow(c: Client): string[] {
+  return [
+    c.clientId,
+    c.name,
+    c.contactEmail,
+    c.contactPhone,
+    c.kbEnabled ? 'TRUE' : 'FALSE',
+    c.kbStatus,
+    c.cogneeUserEmail ?? '',
+    c.cogneePasswordEnc ?? '',
+    JSON.stringify(c.agents ?? []),
+    c.createdAt,
+    c.updatedAt,
+    c.lastError ?? '',
+  ];
+}
+
+export async function listClients(): Promise<Client[]> {
+  await ensureClientsHeader();
+  const indexId = getIndexSheetId();
+  const data = await authedFetch(`${SHEETS_BASE}/${indexId}/values/${CLIENTS_TAB}!A2:L10000`).catch(
+    () => null
+  );
+  const values: string[][] = data?.values ?? [];
+  return values.filter((row) => row[0]).map(rowToClient).reverse(); // newest first
+}
+
+/**
+ * Always just writes the basic record -- name/contact/KB flag -- regardless
+ * of whether a knowledge base will ever be provisioned. This is what keeps
+ * survey-only clients (KB checkbox off) a complete, one-step flow: nothing
+ * about Cognee is touched here at all. See client-onboarding-plan.md for why
+ * this is deliberately decoupled from provisioning.
+ */
+export async function createClient(input: {
+  name: string;
+  contactEmail: string;
+  contactPhone: string;
+  kbEnabled: boolean;
+}): Promise<Client> {
+  await ensureClientsHeader();
+  const indexId = getIndexSheetId();
+
+  const now = new Date().toISOString();
+  const client: Client = {
+    clientId: randomUUID(),
+    name: input.name,
+    contactEmail: input.contactEmail,
+    contactPhone: input.contactPhone,
+    kbEnabled: input.kbEnabled,
+    kbStatus: input.kbEnabled ? 'pending' : 'none',
+    cogneeUserEmail: null,
+    cogneePasswordEnc: null,
+    agents: [],
+    createdAt: now,
+    updatedAt: now,
+    lastError: null,
+  };
+
+  await authedFetch(
+    `${SHEETS_BASE}/${indexId}/values/${CLIENTS_TAB}!A:L:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ values: [clientToRow(client)] }),
+    }
+  );
+
+  return client;
+}
+
+async function findClientRowIndex(clientId: string): Promise<number> {
+  const indexId = getIndexSheetId();
+  const data = await authedFetch(`${SHEETS_BASE}/${indexId}/values/${CLIENTS_TAB}!A2:A10000`).catch(
+    () => null
+  );
+  const values: string[][] = data?.values ?? [];
+  return values.findIndex((row) => row[0] === clientId);
+}
+
+export async function getClient(clientId: string): Promise<Client | null> {
+  await ensureClientsHeader();
+  const indexId = getIndexSheetId();
+  const rowIndex = await findClientRowIndex(clientId);
+  if (rowIndex === -1) return null;
+
+  const sheetRow = rowIndex + 2; // +2: header row, plus 0-indexed values[]
+  const data = await authedFetch(
+    `${SHEETS_BASE}/${indexId}/values/${CLIENTS_TAB}!A${sheetRow}:L${sheetRow}`
+  );
+  const row: string[] = data?.values?.[0] ?? [];
+  if (!row[0]) return null;
+  return rowToClient(row);
+}
+
+/** Overwrite a client's full row -- used after provisioning (or a provisioning failure) to persist the new state. */
+export async function updateClient(client: Client): Promise<void> {
+  const indexId = getIndexSheetId();
+  const rowIndex = await findClientRowIndex(client.clientId);
+  if (rowIndex === -1) {
+    throw new Error(`Client ${client.clientId} not found -- can't update.`);
+  }
+  const sheetRow = rowIndex + 2;
+  const updated: Client = { ...client, updatedAt: new Date().toISOString() };
+
+  await authedFetch(
+    `${SHEETS_BASE}/${indexId}/values/${CLIENTS_TAB}!A${sheetRow}:L${sheetRow}?valueInputOption=RAW`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ values: [clientToRow(updated)] }),
+    }
+  );
 }
 
 export { normalizeSpreadsheetId };
