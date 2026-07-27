@@ -1,7 +1,11 @@
 # Fallback for a plain Docker + nginx host. If deploying via Coolify (see
-# README section 5), this file isn't needed -- Coolify builds straight from
-# the Dockerfile, manages env vars through its own UI, and runs its own
-# proxy, so this and env_file below would be redundant.
+# README section 5), THIS FILE ISN'T USED -- Coolify builds straight from
+# the Dockerfile as a "Dockerfile-based Application", not a docker-compose
+# resource, and manages env vars and persistent storage through its own UI
+# instead. The volume below matters for this file's own docker-compose
+# deployment path; for Coolify, the equivalent step is adding a persistent
+# volume in the app's "Storages" tab, mounted at /app/data -- do that once,
+# or the embedded SQLite clients database gets wiped on every redeploy.
 services:
   survey-parser:
     build: .
@@ -14,3 +18,8 @@ services:
     # 3011 picked to avoid clashing with Dograh's own 3010 -- change freely.
     ports:
       - "127.0.0.1:3011:3000"
+    volumes:
+      - survey_parser_data:/app/data
+
+volumes:
+  survey_parser_data:

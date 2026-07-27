@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getClient, updateClient } from '@/lib/googleSheets';
+import { getClient, updateClient } from '@/lib/clientsDb';
 import { provisionClientKnowledgeBase } from '@/lib/cognee';
 
 export const runtime = 'nodejs';

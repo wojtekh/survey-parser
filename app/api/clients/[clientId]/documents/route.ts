@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getClient } from '@/lib/googleSheets';
+import { getClient } from '@/lib/clientsDb';
 import { decryptSecret, rememberDocument } from '@/lib/cognee';
 
 export const runtime = 'nodejs';

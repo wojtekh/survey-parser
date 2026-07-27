@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getClient } from '@/lib/googleSheets';
+import { getClient } from '@/lib/clientsDb';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
