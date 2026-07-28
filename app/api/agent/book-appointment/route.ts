@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getBusySlots, bookAppointment, getDefaultDurationMinutes } from '@/lib/googleCalendar';
+import { getBusySlots, bookAppointment, parseDurationMinutes } from '@/lib/googleCalendar';
 import { checkAgentSecret } from '@/lib/checkAgentSecret';
 import { DateTime } from 'luxon';
 
@@ -40,10 +40,7 @@ export async function POST(request: Request) {
   const phone: string | undefined = body.phone;
   const email: string | undefined = body.email;
   const notes: string | undefined = body.notes;
-  const durationMinutes: number =
-    typeof body.duration_minutes === 'number' && body.duration_minutes > 0
-      ? body.duration_minutes
-      : getDefaultDurationMinutes();
+  const durationMinutes = parseDurationMinutes(body.duration_minutes);
 
   if (!conversationId) {
     // Diagnostic only, not a rejection -- see comment above. Worth knowing

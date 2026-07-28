@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getAvailableSlots, getDefaultDurationMinutes, resolveRequestedDate } from '@/lib/googleCalendar';
+import { getAvailableSlots, parseDurationMinutes, resolveRequestedDate } from '@/lib/googleCalendar';
 import { checkAgentSecret } from '@/lib/checkAgentSecret';
 
 export const runtime = 'nodejs';
@@ -27,10 +27,7 @@ export async function POST(request: Request) {
 
   const body = await request.json().catch(() => ({}));
   const rawDate: string | undefined = body.date;
-  const durationMinutes: number =
-    typeof body.duration_minutes === 'number' && body.duration_minutes > 0
-      ? body.duration_minutes
-      : getDefaultDurationMinutes();
+  const durationMinutes = parseDurationMinutes(body.duration_minutes);
 
   if (!rawDate || typeof rawDate !== 'string') {
     return NextResponse.json({ error: 'Missing date.' }, { status: 400 });

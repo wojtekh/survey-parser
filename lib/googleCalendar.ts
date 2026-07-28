@@ -101,6 +101,19 @@ export function getDefaultDurationMinutes(): number {
   return Number(process.env.APPOINTMENT_DURATION_MINUTES ?? 30);
 }
 
+/**
+ * Parse a duration_minutes value from a tool call body, tolerating a
+ * numeric string ("30") as well as a real JSON number -- some HTTP tool
+ * integrations serialize "number"-typed parameters as strings, and a
+ * strict `typeof === 'number'` check would silently fall back to the
+ * default instead of using what was actually passed. Falls back to
+ * getDefaultDurationMinutes() for anything missing, non-numeric, or <= 0.
+ */
+export function parseDurationMinutes(value: unknown): number {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : getDefaultDurationMinutes();
+}
+
 const WEEKDAY_NAMES = [
   'monday',
   'tuesday',
@@ -151,7 +164,41 @@ export function resolveRequestedDate(raw: string): string {
     return now.plus({ days: daysAhead }).toFormat('yyyy-MM-dd');
   }
 
-  return raw.trim(); // assume literal YYYY-MM-DD; caller validates the format
+  // Falls through here for anything that isn't "today"/"tomorrow"/a bare
+  // weekday name -- notably literal YYYY-MM-DD (handled below, first
+  // format tried), and calendar-style phrasing real callers actually use,
+  // like "Monday, August 3rd" or "August 4th" (confirmed against a real
+  // test call where the agent passed exactly these). A leading weekday
+  // name is stripped first since it's redundant once we have month+day;
+  // ordinal suffixes (1st/2nd/3rd/4th) are stripped since luxon's parser
+  // doesn't understand them.
+  let cleaned = raw.trim().replace(/^(?:\w+day),?\s+/i, '');
+  cleaned = cleaned.replace(/(\d+)(st|nd|rd|th)\b/gi, '$1').replace(/\s+/g, ' ').trim();
+
+  const currentYear = now.year;
+  const candidates = [
+    { text: cleaned, format: 'yyyy-MM-dd' },
+    { text: cleaned, format: 'MMMM d, yyyy' },
+    { text: cleaned, format: 'MMMM d yyyy' },
+    { text: `${cleaned} ${currentYear}`, format: 'MMMM d yyyy' },
+    { text: cleaned, format: 'MMM d, yyyy' },
+    { text: `${cleaned} ${currentYear}`, format: 'MMM d yyyy' },
+    { text: cleaned, format: 'M/d/yyyy' },
+    { text: `${cleaned}/${currentYear}`, format: 'M/d/yyyy' },
+  ];
+
+  for (const { text, format } of candidates) {
+    const parsed = DateTime.fromFormat(text, format, { zone: timeZone });
+    if (parsed.isValid) {
+      // A bare "month day" with no year defaults to the current year; if
+      // that's already more than a day in the past, the caller almost
+      // certainly meant next year (e.g. booking in December for January).
+      const resolved = parsed < now.minus({ days: 1 }) ? parsed.plus({ years: 1 }) : parsed;
+      return resolved.toFormat('yyyy-MM-dd');
+    }
+  }
+
+  return raw.trim(); // give up -- caller validates the YYYY-MM-DD format and surfaces a clear error
 }
 
 export interface BusySlot {

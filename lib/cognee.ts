@@ -254,3 +254,144 @@ export async function rememberDocument(
     body: form,
   });
 }
+
+/**
+ * Upload several documents into an agent's knowledge base as one batch:
+ * add() each file individually, then a single cognify() over the whole
+ * batch -- produces more consistent cross-document entity linking than N
+ * separate remember() calls (each of which builds the graph in isolation).
+ * See client-onboarding-plan.md's ingestion-design section.
+ */
+export async function addDocumentsBatch(
+  agentApiKey: string,
+  files: File[],
+  datasetName?: string
+): Promise<void> {
+  const dataset = datasetName ?? 'main_dataset';
+
+  for (const file of files) {
+    const form = new FormData();
+    form.append('data', file, file.name);
+    form.append('datasetName', dataset);
+    await cogneeFetch('/api/v1/add', {
+      method: 'POST',
+      headers: { 'X-Api-Key': agentApiKey },
+      body: form,
+    });
+  }
+
+  await cogneeFetch('/api/v1/cognify', {
+    method: 'POST',
+    headers: { 'X-Api-Key': agentApiKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ datasets: [dataset] }),
+  });
+}
+
+export interface AgentDocument {
+  dataId: string;
+  datasetId: string;
+  name: string;
+}
+
+/** Look up the dataset ID Cognee assigned to `datasetName` for the caller (agent) making this request. */
+async function findDatasetId(agentApiKey: string, datasetName: string): Promise<string | null> {
+  const datasets = await cogneeFetch('/api/v1/datasets', {
+    headers: { 'X-Api-Key': agentApiKey },
+  });
+  const list = Array.isArray(datasets) ? datasets : datasets?.datasets;
+  const match = Array.isArray(list) ? list.find((d: any) => d.name === datasetName) : null;
+  return match?.id ?? match?.dataset_id ?? null;
+}
+
+/**
+ * List the documents ingested into one agent's knowledge base. Returns []
+ * if the agent hasn't had anything uploaded yet (no dataset created).
+ */
+export async function listAgentDocuments(
+  agentApiKey: string,
+  datasetName?: string
+): Promise<AgentDocument[]> {
+  const dataset = datasetName ?? 'main_dataset';
+  const datasetId = await findDatasetId(agentApiKey, dataset);
+  if (!datasetId) return [];
+
+  const data = await cogneeFetch(`/api/v1/datasets/${datasetId}/data`, {
+    headers: { 'X-Api-Key': agentApiKey },
+  });
+  const items = Array.isArray(data) ? data : data?.data ?? [];
+  return items.map((item: any) => ({
+    dataId: item.id ?? item.data_id,
+    datasetId,
+    name: item.name ?? item.file_metadata?.name ?? item.raw_data_location ?? 'Untitled document',
+  }));
+}
+
+/** Delete a single ingested document from an agent's dataset. */
+export async function deleteAgentDocument(
+  agentApiKey: string,
+  datasetId: string,
+  dataId: string
+): Promise<void> {
+  await cogneeFetch(`/api/v1/datasets/${datasetId}/data/${dataId}`, {
+    method: 'DELETE',
+    headers: { 'X-Api-Key': agentApiKey },
+  });
+}
+
+/**
+ * Revoke one agent's Cognee identity (login/API key), using the CLIENT's
+ * own token -- agent identities are child users of the client, so deleting
+ * one requires the parent's auth, same as creating one does.
+ *
+ * Deliberately does NOT touch the agent's dataset/documents -- Wojtek's
+ * explicit call is that documents may be shared (via a future tenant-level
+ * grant) and must survive a single agent's removal. Whether Cognee's own
+ * DELETE /agents/{id} internally cascades to the dataset is an open
+ * question we haven't verified yet (see client-onboarding-plan.md) --
+ * if it turns out to cascade, this function's contract is violated by
+ * Cognee itself, not by this code, and the mitigation would be granting
+ * the client's own parent user access to the dataset *before* calling
+ * this, so the data has another owner regardless of what deletion does.
+ */
+export async function deleteCogneeAgent(
+  cogneeUserEmail: string,
+  cogneePasswordEnc: string,
+  agentId: string
+): Promise<void> {
+  const password = decryptSecret(cogneePasswordEnc);
+  const token = await loginCogneeUser(cogneeUserEmail, password);
+  await cogneeFetch(`/api/v1/agents/${agentId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+/**
+ * Cascade-delete every agent identity under a client's Cognee user. Best
+ * effort per agent -- collects failures rather than throwing on the first
+ * one, so a single already-gone or already-broken agent doesn't block
+ * cleanup of the rest. Cognee has no "delete user" endpoint we've found,
+ * so the client's own parent Cognee account is NOT deleted here -- only
+ * its agent identities are. See client-onboarding-plan.md.
+ */
+export async function deleteAllCogneeAgents(
+  cogneeUserEmail: string,
+  cogneePasswordEnc: string,
+  agentIds: string[]
+): Promise<{ failed: { agentId: string; error: string }[] }> {
+  const password = decryptSecret(cogneePasswordEnc);
+  const token = await loginCogneeUser(cogneeUserEmail, password);
+
+  const failed: { agentId: string; error: string }[] = [];
+  for (const agentId of agentIds) {
+    try {
+      await cogneeFetch(`/api/v1/agents/${agentId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch (err) {
+      failed.push({ agentId, error: err instanceof Error ? err.message : 'Unknown error' });
+    }
+  }
+  return { failed };
+}

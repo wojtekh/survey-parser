@@ -1,43 +1,17 @@
 'use client';
 
-import { useEffect, useState, FormEvent } from 'react';
-import Link from 'next/link';
+import { useState, FormEvent } from 'react';
+import { useRouter } from 'next/navigation';
+import { notifyClientsChanged } from './layout';
 
-interface ClientListItem {
-  clientId: string;
-  name: string;
-  contactEmail: string;
-  contactPhone: string;
-  kbEnabled: boolean;
-  kbStatus: 'none' | 'pending' | 'provisioned' | 'error';
-}
-
-function statusBadge(client: ClientListItem) {
-  if (!client.kbEnabled) return <span className="type-badge">Survey only</span>;
-  if (client.kbStatus === 'provisioned') return <span className="type-badge">KB provisioned</span>;
-  if (client.kbStatus === 'error') return <span className="badge-danger">KB error</span>;
-  return <span className="type-badge">KB pending</span>;
-}
-
-export default function ClientsPage() {
-  const [clients, setClients] = useState<ClientListItem[] | null>(null);
+export default function ClientsIndexPage() {
+  const router = useRouter();
   const [name, setName] = useState('');
   const [contactEmail, setContactEmail] = useState('');
   const [contactPhone, setContactPhone] = useState('');
   const [kbEnabled, setKbEnabled] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  function loadClients() {
-    fetch('/api/clients')
-      .then((res) => res.json())
-      .then((body) => setClients(body.clients ?? []))
-      .catch(() => setClients([]));
-  }
-
-  useEffect(() => {
-    loadClients();
-  }, []);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -58,28 +32,26 @@ export default function ClientsPage() {
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? 'Failed to create client.');
-      setName('');
-      setContactEmail('');
-      setContactPhone('');
-      setKbEnabled(false);
-      loadClients();
+      notifyClientsChanged();
+      router.push(`/clients/${body.client.clientId}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create client.');
-    } finally {
       setSaving(false);
     }
   }
 
   return (
     <>
-      <div className="row">
-        <h2 style={{ fontSize: 18, margin: 0 }}>Clients</h2>
-        <Link href="/" className="btn">
-          &larr; Back to surveys
-        </Link>
+      <div className="cw-header">
+        <div style={{ flex: 1 }}>
+          <h1 className="cw-header-title">Add a client</h1>
+          <div className="cw-header-sub">
+            Pick a client from the left, or create a new one here.
+          </div>
+        </div>
       </div>
 
-      <form className="card stack" onSubmit={handleSubmit}>
+      <form className="cw-card stack" onSubmit={handleSubmit} style={{ maxWidth: 480 }}>
         <div>
           <label htmlFor="clientName">Client name</label>
           <input
@@ -126,11 +98,11 @@ export default function ClientsPage() {
             disabled={saving}
             style={{ width: 16, height: 16 }}
           />
-          <label htmlFor="kbEnabled" style={{ margin: 0, fontWeight: 400, color: 'var(--text-primary)' }}>
+          <label htmlFor="kbEnabled" style={{ margin: 0, fontWeight: 400, textTransform: 'none', letterSpacing: 0, color: 'var(--cw-text-body)' }}>
             Create a knowledge base for this client
           </label>
         </div>
-        <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '-8px 0 0' }}>
+        <p style={{ fontSize: 12, color: 'var(--cw-text-tertiary)', margin: '-8px 0 0' }}>
           Leave this off for clients who only need surveys run through Dograh -- no Cognee memory
           gets set up. You can turn it on for an existing client later too.
         </p>
@@ -138,42 +110,11 @@ export default function ClientsPage() {
         {error && <p className="error-text">{error}</p>}
 
         <div className="row" style={{ justifyContent: 'flex-end' }}>
-          <button type="submit" className="btn btn-primary" disabled={saving || !name.trim()}>
-            {saving ? 'Saving…' : 'Create client'}
+          <button type="submit" className="cw-btn cw-btn-primary" disabled={saving || !name.trim()}>
+            {saving ? 'Creating…' : 'Create client'}
           </button>
         </div>
       </form>
-
-      <div className="stack">
-        {clients === null ? (
-          <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Loading…</p>
-        ) : clients.length === 0 ? (
-          <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-            No clients yet -- create the first one above.
-          </p>
-        ) : (
-          <div className="stack" style={{ gap: 8 }}>
-            {clients.map((c) => (
-              <Link
-                key={c.clientId}
-                href={`/clients/${c.clientId}`}
-                className="question-item row"
-                style={{ textDecoration: 'none', color: 'inherit' }}
-              >
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 14 }}>{c.name}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                    {c.contactEmail || 'no contact email'} · {c.contactPhone || 'no phone'}
-                  </div>
-                </div>
-                <div className="row" style={{ width: 'auto' }}>
-                  {statusBadge(c)}
-                </div>
-              </Link>
-            ))}
-          </div>
-        )}
-      </div>
     </>
   );
 }

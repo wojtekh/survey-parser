@@ -195,3 +195,25 @@ export async function updateClient(client: Client): Promise<void> {
     throw new Error(`Client ${client.clientId} not found -- can't update.`);
   }
 }
+
+/** Remove a client's row entirely. Cognee-side cleanup (deleting its agent identities) must happen before calling this -- see the /api/clients/[clientId] DELETE route. */
+export async function deleteClientRecord(clientId: string): Promise<void> {
+  const result = getDb().prepare('DELETE FROM clients WHERE client_id = ?').run(clientId);
+  if (result.changes === 0) {
+    throw new Error(`Client ${clientId} not found -- can't delete.`);
+  }
+}
+
+/** Strip one agent out of a client's agent list and persist -- used after successfully revoking that agent's Cognee identity. */
+export async function removeAgentFromClient(clientId: string, agentId: string): Promise<Client> {
+  const client = await getClient(clientId);
+  if (!client) {
+    throw new Error(`Client ${clientId} not found -- can't remove agent.`);
+  }
+  const updated: Client = {
+    ...client,
+    agents: client.agents.filter((a) => a.agentId !== agentId),
+  };
+  await updateClient(updated);
+  return updated;
+}
