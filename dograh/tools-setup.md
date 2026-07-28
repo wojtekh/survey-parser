@@ -254,6 +254,24 @@ appointment.
 
 ---
 
+## Tool 9/10: calcom_check_availability / calcom_book_appointment (Cal.com booking, alternative backend)
+
+Same purpose as Tools 5/6, added alongside them rather than replacing
+them -- Cal.com as an alternative appointment-booking backend to Google
+Calendar. Use this pair on an agent instead of Tools 5/6 (not both) when
+Cal.com is the booking system for that line of business. Requires
+`CAL_API_KEY` and `CAL_EVENT_TYPE_ID` set (main README's Cal.com section)
+-- no Google Calendar/domain-wide-delegation setup needed for this pair.
+See `README_TOOLS.md`'s Tool 9/10 for exact field values.
+
+Cal.com does most of the scheduling work itself (business hours, buffers,
+minimum notice, double-booking prevention all live on the Event Type's
+own config in Cal.com's dashboard, not in env vars here) -- so if
+availability looks wrong, check the Event Type's settings in Cal.com
+first, not `BUSINESS_HOURS_START`/`END` (those don't apply to this pair).
+
+---
+
 ## Inbound calls (phone_number -> spreadsheet_id, resolved server-side)
 
 An inbound call has no `initial_context.spreadsheet_id` -- nobody dials in

@@ -82,6 +82,47 @@ its two route files under a new path, point the copy's `GOOGLE_CALENDAR_ID`
 / `BUSINESS_*` env vars at the new calendar -- no changes needed to the
 originals.
 
+### 4b. Cal.com (appointment booking) -- optional, alternative backend
+
+A second booking backend, added alongside Google Calendar above rather
+than replacing it -- two new tools (`calcom_check_availability`,
+`calcom_book_appointment` -- see `dograh/README_TOOLS.md`'s Tool 9/10)
+that mirror the Google Calendar ones but call Cal.com's API instead. Pick
+whichever backend fits a given agent; there's no requirement to use both,
+and an agent shouldn't normally have both pairs attached at once. Skip
+this section entirely if Google Calendar alone is enough.
+
+Cal.com handles most of the actual scheduling logic itself -- working
+hours, buffers, minimum notice, and double-booking prevention are all
+configured once on an Event Type in Cal.com's own dashboard and enforced
+server-side, rather than via the `BUSINESS_HOURS_START`/`END`/
+`BUSINESS_DAYS` env vars the Google Calendar path uses. Less code and
+less to get wrong here, but check the Event Type's settings in Cal.com,
+not env vars, if availability looks wrong.
+
+1. Sign up at [cal.com](https://cal.com) (hosted/cloud -- no separate
+   infrastructure to run). A self-hosted fork (e.g. cal.diy) works too,
+   same API surface, see step 4.
+2. Create an **Event Type** for the appointment (e.g. "Consultation",
+   30 min). Note its numeric ID -- Event Type -> Advanced/URL, or
+   `GET /v2/event-types` once you have an API key.
+3. **Settings -> Security -> API Keys** -- generate one (`cal_...` test /
+   `cal_live_...` live).
+4. Fill in the Cal.com keys in `.env`:
+   - `CAL_API_KEY` -- the API key from step 3.
+   - `CAL_EVENT_TYPE_ID` -- the numeric ID from step 2.
+   - `CAL_API_BASE_URL` -- leave blank for hosted cal.com (defaults to
+     `https://api.cal.com`). Only set this for a self-hosted fork, pointed
+     at that instance's API origin.
+5. Follow `dograh/tools-setup.md`'s Tool 9/10 section to create
+   `calcom_check_availability` and `calcom_book_appointment` in the Dograh
+   dashboard, then attach both to whichever agent(s) should book through
+   Cal.com instead of Google Calendar.
+6. Want appointments to also land on a Google Calendar without writing
+   more code? Cal.com has its own native Google Calendar sync (Settings ->
+   **My Availability** / **Apps -> Google Calendar** in Cal.com's
+   dashboard) -- connect it there rather than duplicating that logic here.
+
 ### 5. Run it locally
 
 ```bash

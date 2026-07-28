@@ -376,6 +376,66 @@ without it.
 
 ---
 
+## Tool 9: calcom_check_availability
+
+Cal.com equivalent of Tool 7, added alongside it (not a replacement) --
+see `lib/calcom.ts`'s header comment for the full backend rationale. Use
+this pair instead of Tools 7/8 on an agent when Cal.com is the booking
+backend for that line of business; the two backends don't need to be
+mixed on the same agent. Requires `CAL_API_KEY` and `CAL_EVENT_TYPE_ID`
+set in Coolify (see main README's Cal.com section) -- no Google Calendar
+setup needed for this pair.
+
+| Field | Value |
+|---|---|
+| Name | `calcom_check_availability` |
+| Description | Call this to find open appointment times for a given day before offering any time to the caller. Pass `date` as close to verbatim what the caller said -- never compute or guess a date yourself. Read out 2-3 of the returned slot labels, not the whole list. |
+| Method | `POST` |
+| URL | `https://sp.cognexion.com/api/agent/calcom/check-availability` |
+| Header | `x-agent-secret` = (see above) |
+
+**LLM Parameters:**
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `date` | string | yes | The day to check, exactly as the caller said it: `today`, `tomorrow`, a weekday name (`Tuesday` / `next Tuesday`), or `YYYY-MM-DD`. Resolved server-side, in `BUSINESS_TIME_ZONE`. |
+| `duration_minutes` | number | no | Only meaningful if the Cal.com Event Type has multiple selectable lengths -- a fixed-length Event Type ignores this. Omit to use `APPOINTMENT_DURATION_MINUTES`. |
+
+**Returns:** `{ date, time_zone, slots: [{ label, start_iso, end_iso }], none_available: boolean }` -- no `is_business_day`, unlike Tool 7: Cal.com applies its own Event Type schedule rather than `BUSINESS_HOURS_START`/`END`/`BUSINESS_DAYS`, so that field doesn't map cleanly here.
+
+---
+
+## Tool 10: calcom_book_appointment
+
+Pairs with Tool 9.
+
+| Field | Value |
+|---|---|
+| Name | `calcom_book_appointment` |
+| Description | Call this once the caller has confirmed a specific time from calcom_check_availability's results and given a name and a phone number or email. Pass start_iso exactly as calcom_check_availability returned it for the chosen slot. On a "slot taken" error, call calcom_check_availability again rather than retrying the same start_iso. |
+| Method | `POST` |
+| URL | `https://sp.cognexion.com/api/agent/calcom/book-appointment` |
+| Header | `x-agent-secret` = (see above) |
+
+**LLM Parameters:**
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `start_iso` | string | yes | The `start_iso` of the slot the caller chose, exactly as `calcom_check_availability` returned it. |
+| `duration_minutes` | number | no | Should match what was passed to `calcom_check_availability`. Omit unless the Event Type supports multiple lengths. |
+| `name` | string | yes | The caller's full name. |
+| `phone` | string | no* | The caller's phone number. *At least one of `phone`/`email` is required. |
+| `email` | string | no* | The caller's email. Not required by Cal.com's API itself, but required in practice if the Event Type's booking form marks it required (Event Type -> Advanced -> Booking questions in Cal.com's dashboard) -- if a phone-only booking gets rejected, check there first. |
+| `notes` | string | no | Anything relevant the caller mentioned. Passed through as the Event Type's "Additional notes" field, if it has one. |
+
+Optional: add a `conversation_id` Preset Parameter (`{{initial_context.
+conversation_id}}` or `{{initial_context.caller_number}}`, matching
+whichever survey tools this agent also uses) -- stored in the Cal.com
+booking's metadata, purely for traceability. Not required.
+
+**Returns (success):** `{ ok: true, event_id, start_iso, end_iso, confirmation }` -- `confirmation` is spoken-friendly, safe to read back as-is.
+**Returns (slot taken):** HTTP 409 `{ error }` -- best-effort detection of a Cal.com conflict rejection (see `lib/calcom.ts`); re-call `calcom_check_availability`, don't retry.
+
+---
+
 ## Which tools go on which agent
 
 | Agent | Tools attached |
@@ -384,7 +444,8 @@ without it.
 | Voice Survey Agent (Inbound) | `get_next_question_inbound`, `submit_answer_inbound` |
 | Complex screener, KB-driven (e.g. AGO) | `record_answer` (+ Knowledge Base document, Full Document mode) |
 | Complex screener, deterministic | `get_next_screener_question` (KB document optional, for tone only) |
-| Any agent that should offer appointment booking | `check_availability`, `book_appointment` -- can be added alongside any of the above |
+| Any agent that should offer appointment booking via Google Calendar | `check_availability`, `book_appointment` -- can be added alongside any of the above |
+| Any agent that should offer appointment booking via Cal.com | `calcom_check_availability`, `calcom_book_appointment` -- alternative to the Google Calendar pair, not usually both on the same agent |
 
 ---
 

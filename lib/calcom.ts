@@ -1,0 +1,216 @@
+import { DateTime } from 'luxon';
+import { getBusinessTimeZone } from './dateResolution';
+
+// Cal.com v2 API wrapper -- an alternative booking backend alongside
+// lib/googleCalendar.ts, not a replacement. Cal.com does most of the work
+// lib/googleCalendar.ts hand-rolls itself: business hours, buffers, min
+// notice, and double-booking prevention are all configured once on the
+// Event Type in Cal.com's dashboard and enforced server-side, rather than
+// via BUSINESS_HOURS_START/END env vars and a manual freeBusy recheck here.
+// Trade-off: less code and less to get wrong on our side, but the actual
+// scheduling rules live in Cal.com's UI instead of this repo -- check the
+// Event Type's settings, not env vars, if availability looks wrong.
+//
+// Setup (hosted cal.com):
+//   1. cal.com -> create an Event Type (e.g. "Consultation", 30 min).
+//      Note its numeric ID (Event Type -> Advanced/URL, or via GET
+//      /v2/event-types once you have an API key).
+//   2. Settings -> Security -> generate an API key (cal_... test /
+//      cal_live_... live).
+//   3. Set CAL_API_KEY and CAL_EVENT_TYPE_ID in .env / Coolify.
+//
+// Self-hosted (cal.diy or similar): set CAL_API_BASE_URL to your own
+// instance's API origin (e.g. https://cal.yourdomain.com/api) -- same
+// endpoints, same auth model, just a different host. Verify the exact API
+// path prefix against whatever version you're running; it has moved
+// around across Cal.com/cal.diy releases.
+//
+// cal-api-version is a required header, pinned per endpoint below.
+// Cal.com does version its API and can require bumping these dates on
+// upgrade -- check https://cal.com/docs/api-reference/v2 if a request
+// starts failing after a Cal.com update.
+
+function getApiBase(): string {
+  return (process.env.CAL_API_BASE_URL || 'https://api.cal.com').replace(/\/$/, '');
+}
+
+function getApiKey(): string {
+  const key = process.env.CAL_API_KEY;
+  if (!key) {
+    throw new Error('CAL_API_KEY not set. See lib/calcom.ts header comment for setup.');
+  }
+  return key;
+}
+
+export function getEventTypeId(): number {
+  const raw = process.env.CAL_EVENT_TYPE_ID;
+  const id = Number(raw);
+  if (!raw || !Number.isFinite(id)) {
+    throw new Error('CAL_EVENT_TYPE_ID not set or not a number. See lib/calcom.ts header comment for setup.');
+  }
+  return id;
+}
+
+async function calFetch(path: string, init: RequestInit & { apiVersion: string }): Promise<any> {
+  const { apiVersion, ...rest } = init;
+  const res = await fetch(`${getApiBase()}${path}`, {
+    ...rest,
+    headers: {
+      ...(rest.headers ?? {}),
+      Authorization: `Bearer ${getApiKey()}`,
+      'Content-Type': 'application/json',
+      'cal-api-version': apiVersion,
+    },
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    const message = body?.error?.message || body?.message || JSON.stringify(body);
+    throw new Error(`Cal.com API error (${res.status}) on ${rest.method ?? 'GET'} ${path}: ${message}`);
+  }
+  return body;
+}
+
+export interface OpenSlot {
+  /** Spoken-friendly label in business-hours timezone, e.g. "9:00 AM". */
+  label: string;
+  startISO: string;
+  endISO: string;
+}
+
+/**
+ * Open slots for one calendar date, entirely as computed by Cal.com's own
+ * Event Type schedule (working hours, buffers, min notice, existing
+ * bookings) -- unlike lib/googleCalendar.ts's getAvailableSlots, there's
+ * no local business-hours/day-of-week logic here, Cal.com already applies
+ * its own rules server-side. durationMinutes is only meaningful for Event
+ * Types configured with multiple selectable lengths; for a fixed-length
+ * Event Type it's ignored by Cal.com (the configured length always wins).
+ */
+export async function getAvailableSlots(
+  dateISO: string,
+  durationMinutes?: number
+): Promise<{ slots: OpenSlot[]; timeZone: string }> {
+  const timeZone = getBusinessTimeZone();
+  const eventTypeId = getEventTypeId();
+
+  const dayStart = DateTime.fromISO(dateISO, { zone: timeZone }).startOf('day');
+  if (!dayStart.isValid) {
+    throw new Error(`Invalid date "${dateISO}". Expected YYYY-MM-DD.`);
+  }
+  const dayEnd = dayStart.endOf('day');
+
+  const params = new URLSearchParams({
+    eventTypeId: String(eventTypeId),
+    startTime: dayStart.toUTC().toISO()!,
+    endTime: dayEnd.toUTC().toISO()!,
+    timeZone,
+    slotFormat: 'range',
+  });
+  if (durationMinutes) params.set('duration', String(durationMinutes));
+
+  const res = await calFetch(`/v2/slots/available?${params.toString()}`, {
+    method: 'GET',
+    apiVersion: '2024-09-04',
+  });
+
+  // Response is grouped by date: { data: { "YYYY-MM-DD": [{start,end}, ...] } }.
+  // Flatten across whatever date keys came back (the UTC window can spill
+  // into an adjacent date key depending on timezone offset) -- already
+  // scoped to this one business day via startTime/endTime above.
+  const grouped: Record<string, Array<{ start: string; end: string }>> = res?.data ?? {};
+  const raw = Object.values(grouped).flat();
+
+  const slots: OpenSlot[] = raw.map((s) => {
+    const startLocal = DateTime.fromISO(s.start).setZone(timeZone);
+    return {
+      label: startLocal.toFormat('h:mm a'),
+      startISO: DateTime.fromISO(s.start).toUTC().toISO()!,
+      endISO: DateTime.fromISO(s.end).toUTC().toISO()!,
+    };
+  });
+
+  return { slots, timeZone };
+}
+
+export interface BookAppointmentInput {
+  startISO: string;
+  durationMinutes?: number;
+  name: string;
+  phone?: string;
+  email?: string;
+  notes?: string;
+  conversationId?: string;
+}
+
+export interface BookedAppointment {
+  eventId: string;
+  startISO: string;
+  endISO: string;
+  /** Spoken-friendly confirmation in business-hours timezone. */
+  confirmation: string;
+}
+
+/**
+ * Create the Cal.com booking. No manual "is this slot still free" recheck
+ * here (unlike lib/googleCalendar.ts's bookAppointment, paired with a
+ * recheck in the book-appointment route) -- Cal.com's own booking creation
+ * validates availability server-side and rejects a conflicting request on
+ * its own, so a separate recheck would just be a redundant round-trip.
+ * The route maps a rejection here to a 409 for the agent to react to.
+ *
+ * Only `name` is required by Cal.com's API itself (`timeZone` is filled in
+ * here too, also required) -- `email` is NOT required by the API schema,
+ * despite that being a common assumption. It CAN still be required in
+ * practice if the specific Event Type's booking form has "email" marked
+ * required in Cal.com's dashboard (Event Type -> Advanced -> Booking
+ * questions) -- check there if a phone-only booking gets rejected.
+ */
+export async function bookAppointment(input: BookAppointmentInput): Promise<BookedAppointment> {
+  const timeZone = getBusinessTimeZone();
+  const eventTypeId = getEventTypeId();
+
+  const attendee: Record<string, unknown> = { name: input.name, timeZone };
+  if (input.email) attendee.email = input.email;
+  if (input.phone) attendee.phoneNumber = input.phone;
+
+  const body: Record<string, unknown> = {
+    start: input.startISO,
+    eventTypeId,
+    attendee,
+  };
+  if (input.durationMinutes) body.lengthInMinutes = input.durationMinutes;
+
+  // Assumes the Event Type has a booking field with slug "notes" (Cal.com's
+  // default "Additional notes" field on most templates) -- if your Event
+  // Type doesn't have one, this is silently ignored by Cal.com rather than
+  // erroring, per bookingFieldsResponses being additionalProperties:true.
+  const bookingFieldsResponses: Record<string, string> = {};
+  if (input.notes) bookingFieldsResponses.notes = input.notes;
+  if (Object.keys(bookingFieldsResponses).length) {
+    body.bookingFieldsResponses = bookingFieldsResponses;
+  }
+  if (input.conversationId) {
+    body.metadata = { conversation_id: input.conversationId };
+  }
+
+  const created = await calFetch('/v2/bookings', {
+    method: 'POST',
+    apiVersion: '2026-02-25',
+    body: JSON.stringify(body),
+  });
+
+  const data = created?.data;
+  if (!data?.start || !data?.end) {
+    throw new Error(`Unexpected Cal.com booking response shape: ${JSON.stringify(created)}`);
+  }
+
+  const startLocal = DateTime.fromISO(data.start).setZone(timeZone);
+  const confirmation = `${startLocal.toFormat('cccc, LLLL d')} at ${startLocal.toFormat('h:mm a')} (${startLocal.offsetNameShort})`;
+
+  return {
+    eventId: data.uid ?? String(data.id),
+    startISO: data.start,
+    endISO: data.end,
+    confirmation,
+  };
+}
