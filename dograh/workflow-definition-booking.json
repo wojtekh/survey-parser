@@ -19,8 +19,8 @@
         "wait_for_user_response": true,
         "allow_interrupt": true,
         "tool_uuids": [
-          "REPLACE_WITH_CHECK_AVAILABILITY_TOOL_UUID",
-          "REPLACE_WITH_BOOK_APPOINTMENT_TOOL_UUID"
+          "fb9cbbeb-ce5a-4053-9660-5b9f66edc884",
+          "07ee7d39-b397-4ecd-8047-6546ac03307f"
         ]
       }
     },
