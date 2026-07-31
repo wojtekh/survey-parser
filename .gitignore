@@ -5,3 +5,4 @@ npm-install.log
 *.log
 tsconfig.tsbuildinfo
 .DS_Store
+.DS_Store
