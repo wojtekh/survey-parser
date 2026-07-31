@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { bookAppointment } from '@/lib/calcom';
-import { parseDurationMinutes } from '@/lib/dateResolution';
 import { checkAgentSecret } from '@/lib/checkAgentSecret';
 import { DateTime } from 'luxon';
 
@@ -37,7 +36,18 @@ export async function POST(request: Request) {
   const phone: string | undefined = body.phone;
   const email: string | undefined = body.email;
   const notes: string | undefined = body.notes;
-  const durationMinutes = parseDurationMinutes(body.duration_minutes);
+
+  // Deliberately NOT defaulting to APPOINTMENT_DURATION_MINUTES here (unlike
+  // check-availability) -- Cal.com rejects lengthInMinutes outright on a
+  // fixed-length Event Type, even when the value matches its own default,
+  // so this must stay undefined unless the agent actually passed one (for
+  // an Event Type with multiple selectable lengths). Tolerates a numeric
+  // string, same as parseDurationMinutes, since some tool integrations
+  // serialize numbers as strings.
+  const rawDuration = body.duration_minutes;
+  const parsedDuration =
+    typeof rawDuration === 'number' ? rawDuration : typeof rawDuration === 'string' ? Number(rawDuration) : NaN;
+  const durationMinutes = Number.isFinite(parsedDuration) && parsedDuration > 0 ? parsedDuration : undefined;
 
   if (!conversationId) {
     console.log('[calcom/book-appointment] conversation_id missing or empty, proceeding anyway:', {
