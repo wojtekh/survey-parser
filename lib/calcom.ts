@@ -101,14 +101,19 @@ export async function getAvailableSlots(
 
   const params = new URLSearchParams({
     eventTypeId: String(eventTypeId),
-    startTime: dayStart.toUTC().toISO()!,
-    endTime: dayEnd.toUTC().toISO()!,
+    start: dayStart.toUTC().toISO()!,
+    end: dayEnd.toUTC().toISO()!,
     timeZone,
-    slotFormat: 'range',
+    format: 'range',
   });
   if (durationMinutes) params.set('duration', String(durationMinutes));
 
-  const res = await calFetch(`/v2/slots/available?${params.toString()}`, {
+  // Endpoint is /v2/slots (not /v2/slots/available -- that path 404s as of
+  // this writing; Cal.com renamed it and the start/end/format params under
+  // the same cal-api-version, 2024-09-04). Confirm against
+  // https://cal.com/docs/api-reference/v2/slots/get-available-time-slots-for-an-event-type
+  // if this starts 404ing again after a Cal.com update.
+  const res = await calFetch(`/v2/slots?${params.toString()}`, {
     method: 'GET',
     apiVersion: '2024-09-04',
   });
