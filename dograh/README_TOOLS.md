@@ -436,6 +436,64 @@ booking's metadata, purely for traceability. Not required.
 
 ---
 
+## Tool 11: calcom_find_appointment
+
+Pairs with Tool 12, same relationship as Tool 9/10 (check availability ->
+book). A caller calling back to cancel doesn't carry a booking uid around,
+so this resolves one (or several, if ambiguous) from whatever identifying
+info they give -- scoped to this app's own `CAL_EVENT_TYPE_ID` and
+upcoming bookings only, so it never surfaces a booking this integration
+didn't make.
+
+| Field | Value |
+|---|---|
+| Name | `calcom_find_appointment` |
+| Description | Call this to look up a caller's existing upcoming appointment before cancelling it. Ask for their name and email (or phone) first if you don't already have it from earlier in the call. If it returns more than one match, read back each option's date/time and ask the caller which one, then use that match's event_id with calcom_cancel_appointment. If none_found is true, tell the caller you couldn't find an upcoming appointment under that information. |
+| Method | `POST` |
+| URL | `https://sp.cognexion.com/api/agent/calcom/find-appointment` |
+| Header | `x-agent-secret` = (see above) |
+
+**LLM Parameters:**
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | no* | The caller's full name, exactly as they say it. |
+| `email` | string | no* | The caller's email, if given -- the most reliable way to find their booking. |
+| `phone` | string | no* | The caller's phone number, if given. *At least one of name/email/phone is required. |
+| `date` | string | no | The day they think the appointment is on, if they mention it -- same format as check_availability's `date` (`today`, `tomorrow`, a weekday name, or `YYYY-MM-DD`). Only useful to narrow down multiple matches, omit if not mentioned. |
+
+**Returns:** `{ matches: [{ event_id, start_iso, end_iso, label }], none_found: boolean }`
+
+`label` is spoken-friendly (e.g. `"Tuesday, March 4 at 9:00 AM"`). If
+`matches` has more than one entry, don't guess which one the caller means
+-- read back the options and ask.
+
+---
+
+## Tool 12: calcom_cancel_appointment
+
+Pairs with Tool 11.
+
+| Field | Value |
+|---|---|
+| Name | `calcom_cancel_appointment` |
+| Description | Call this once the caller has confirmed which specific appointment to cancel (from calcom_find_appointment's results, or one you already booked earlier this same call). Always read back the date/time and get explicit confirmation from the caller before calling this -- there's no undo. |
+| Method | `POST` |
+| URL | `https://sp.cognexion.com/api/agent/calcom/cancel-appointment` |
+| Header | `x-agent-secret` = (see above) |
+
+**LLM Parameters:**
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `event_id` | string | yes | The `event_id` of the appointment to cancel, exactly as returned by `calcom_find_appointment` (or `calcom_book_appointment`, if cancelling one just booked this call). |
+| `reason` | string | no | Why the caller is cancelling, if they say -- passed through to Cal.com as the cancellation reason. |
+
+Optional: add a `conversation_id` Preset Parameter, same as Tool 10 -- purely for traceability, not required.
+
+**Returns (success):** `{ ok: true, event_id, start_iso, end_iso, confirmation }` -- `confirmation` is spoken-friendly, safe to read back as-is (e.g. `"Cancelled the appointment on Tuesday, March 4 at 9:00 AM (EST)."`).
+**Returns (already cancelled):** HTTP 409 `{ error }` -- best-effort detection of Cal.com's already-cancelled rejection; no need to retry.
+
+---
+
 ## Which tools go on which agent
 
 | Agent | Tools attached |
@@ -446,6 +504,7 @@ booking's metadata, purely for traceability. Not required.
 | Complex screener, deterministic | `get_next_screener_question` (KB document optional, for tone only) |
 | Any agent that should offer appointment booking via Google Calendar | `check_availability`, `book_appointment` -- can be added alongside any of the above |
 | Any agent that should offer appointment booking via Cal.com | `calcom_check_availability`, `calcom_book_appointment` -- alternative to the Google Calendar pair, not usually both on the same agent |
+| Any agent that should let callers cancel a Cal.com appointment | `calcom_find_appointment`, `calcom_cancel_appointment` -- add alongside the Cal.com booking pair above; only makes sense on an agent that also has `calcom_book_appointment` |
 
 ---
 

@@ -214,3 +214,113 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Book
     confirmation,
   };
 }
+
+export interface UpcomingBooking {
+  eventId: string;
+  startISO: string;
+  endISO: string;
+  /** Spoken-friendly label in business-hours timezone, e.g. "Tuesday, March 4 at 9:00 AM". */
+  label: string;
+  attendeeName?: string;
+  attendeeEmail?: string;
+  attendeePhone?: string;
+}
+
+/**
+ * Look up a caller's own upcoming booking(s) so calcom_cancel_appointment
+ * has an event_id to act on -- a caller calling back to cancel doesn't
+ * carry a booking uid around, so this resolves one from whatever
+ * identifying info they give instead. Scoped to this app's own
+ * CAL_EVENT_TYPE_ID and status=upcoming, so it only ever surfaces
+ * cancellable appointments this integration actually booked.
+ *
+ * email uses Cal.com's real server-side attendeeEmail filter (exact match)
+ * -- prefer it when available. name falls back to attendeeName (also
+ * server-side, looser match). phone has no server-side filter in Cal.com's
+ * API at all, so it's applied client-side, matching against each result's
+ * attendee.phoneNumber by comparing the last 7 digits (tolerates spoken
+ * numbers coming back with/without a country code or formatting).
+ */
+export async function findUpcomingBookings(params: {
+  name?: string;
+  email?: string;
+  phone?: string;
+}): Promise<UpcomingBooking[]> {
+  const eventTypeId = getEventTypeId();
+  const timeZone = getBusinessTimeZone();
+
+  const query = new URLSearchParams({
+    status: 'upcoming',
+    eventTypeId: String(eventTypeId),
+    limit: '50',
+  });
+  if (params.email) query.set('attendeeEmail', params.email);
+  else if (params.name) query.set('attendeeName', params.name);
+
+  const res = await calFetch(`/v2/bookings?${query.toString()}`, {
+    method: 'GET',
+    apiVersion: '2026-05-01',
+  });
+
+  const raw: any[] = Array.isArray(res?.data) ? res.data : [];
+  const phoneDigits = params.phone ? params.phone.replace(/\D/g, '').slice(-7) : null;
+
+  return raw
+    .filter((b) => b?.status !== 'cancelled' && b?.uid && b?.start && b?.end)
+    .filter((b) => {
+      if (!phoneDigits) return true;
+      const attendees: any[] = b.attendees ?? [];
+      return attendees.some(
+        (a) => typeof a?.phoneNumber === 'string' && a.phoneNumber.replace(/\D/g, '').endsWith(phoneDigits)
+      );
+    })
+    .map((b) => {
+      const startLocal = DateTime.fromISO(b.start).setZone(timeZone);
+      const attendee = (b.attendees ?? [])[0] ?? {};
+      return {
+        eventId: b.uid as string,
+        startISO: DateTime.fromISO(b.start).toUTC().toISO()!,
+        endISO: DateTime.fromISO(b.end).toUTC().toISO()!,
+        label: `${startLocal.toFormat('cccc, LLLL d')} at ${startLocal.toFormat('h:mm a')}`,
+        attendeeName: attendee.name,
+        attendeeEmail: attendee.email,
+        attendeePhone: attendee.phoneNumber,
+      };
+    });
+}
+
+/**
+ * Cancel a Cal.com booking by uid (from findUpcomingBookings, or one the
+ * agent already has from bookAppointment's own response earlier in the
+ * same call). Cal.com returns a 400 if the booking's already cancelled --
+ * the route layer maps that to a clean 409 for the agent, same pattern as
+ * book_appointment's slot-taken handling.
+ */
+export async function cancelBooking(
+  bookingUid: string,
+  cancellationReason?: string
+): Promise<{ startISO: string; endISO: string; confirmation: string }> {
+  const timeZone = getBusinessTimeZone();
+  const body: Record<string, unknown> = {};
+  if (cancellationReason) body.cancellationReason = cancellationReason;
+
+  const res = await calFetch(`/v2/bookings/${encodeURIComponent(bookingUid)}/cancel`, {
+    method: 'POST',
+    apiVersion: '2026-02-25',
+    body: JSON.stringify(body),
+  });
+
+  const data = res?.data;
+  if (!data?.start || !data?.end) {
+    throw new Error(`Unexpected Cal.com cancel response shape: ${JSON.stringify(res)}`);
+  }
+
+  const startLocal = DateTime.fromISO(data.start).setZone(timeZone);
+  const confirmation = `${startLocal.toFormat('cccc, LLLL d')} at ${startLocal.toFormat('h:mm a')} (${startLocal.offsetNameShort})`;
+
+  return {
+    startISO: data.start,
+    endISO: data.end,
+    confirmation,
+  };
+}
