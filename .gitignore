@@ -4,3 +4,4 @@ node_modules
 npm-install.log
 *.log
 tsconfig.tsbuildinfo
+.DS_Store
