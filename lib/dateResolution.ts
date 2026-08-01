@@ -58,7 +58,15 @@ export function resolveRequestedDate(raw: string): string {
   if (normalized === 'today') return now.toFormat('yyyy-MM-dd');
   if (normalized === 'tomorrow') return now.plus({ days: 1 }).toFormat('yyyy-MM-dd');
 
-  const nextMatch = normalized.match(/^next\s+(\w+)$/);
+  // Callers phrase "the Wednesday of next calendar week" several different
+  // ways -- "next Wednesday", "next week Wednesday", "Wednesday next week"
+  // all confirmed heard on real test calls. All three get treated
+  // identically (same nearest-upcoming-weekday semantics, see the comment
+  // below on why "next" doesn't always mean +7 days).
+  const nextWeekPrefixMatch = normalized.match(/^next\s+week\s+(\w+)$/);
+  const nextWeekSuffixMatch = normalized.match(/^(\w+)\s+next\s+week$/);
+  const nextPlainMatch = normalized.match(/^next\s+(\w+)$/);
+  const nextMatch = nextWeekPrefixMatch ?? nextWeekSuffixMatch ?? nextPlainMatch;
   const weekdayWord = nextMatch ? nextMatch[1] : normalized;
   const weekdayIndex = WEEKDAY_NAMES.indexOf(weekdayWord); // 0=Monday ... 6=Sunday
 

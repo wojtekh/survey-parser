@@ -51,17 +51,37 @@ export function getEventTypeId(): number {
   return id;
 }
 
+// Deliberately shorter than Dograh's own tool-call timeout (observed at 5s
+// on a real test call -- "Request timed out after 5.0 seconds", followed by
+// a pipeline crash). Aborting on our side first means the agent gets back a
+// real, actionable error ("Cal.com is slow right now, try again") instead of
+// leaving Dograh to hit its own timeout, which appears not to fail
+// gracefully. Not a fix for whatever made Cal.com slow that one time -- just
+// makes sure OUR response always beats Dograh's cutoff when it happens again.
+const CAL_API_TIMEOUT_MS = 3500;
+
 async function calFetch(path: string, init: RequestInit & { apiVersion: string }): Promise<any> {
   const { apiVersion, ...rest } = init;
-  const res = await fetch(`${getApiBase()}${path}`, {
-    ...rest,
-    headers: {
-      ...(rest.headers ?? {}),
-      Authorization: `Bearer ${getApiKey()}`,
-      'Content-Type': 'application/json',
-      'cal-api-version': apiVersion,
-    },
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${getApiBase()}${path}`, {
+      ...rest,
+      headers: {
+        ...(rest.headers ?? {}),
+        Authorization: `Bearer ${getApiKey()}`,
+        'Content-Type': 'application/json',
+        'cal-api-version': apiVersion,
+      },
+      signal: AbortSignal.timeout(CAL_API_TIMEOUT_MS),
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === 'TimeoutError') {
+      throw new Error(
+        `Cal.com API did not respond within ${CAL_API_TIMEOUT_MS / 1000}s on ${rest.method ?? 'GET'} ${path}.`
+      );
+    }
+    throw err;
+  }
   const body = await res.json().catch(() => null);
   if (!res.ok) {
     const message = body?.error?.message || body?.message || JSON.stringify(body);
