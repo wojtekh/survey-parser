@@ -90,6 +90,51 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to book appointment.';
+
+    // A TIMEOUT IS NOT A FAILURE -- it's an unknown, and treating it as a
+    // failure caused a real double-booking on 2026-08-10: calFetch aborted at
+    // 3.5s, Cal.com completed the booking anyway, the agent was told it had
+    // failed, apologised, re-offered slots, and the caller ended up with two
+    // appointments (10:30am and 2:00pm) for one call.
+    //
+    // Aborting the request on our side does NOT cancel Cal.com's work. The
+    // write may already have committed.
+    //
+    // Deliberately NOT verifying inline here. Dograh's tool cutoff is ~5s and
+    // calFetch already spent 3.5s; a findUpcomingBookings call could take
+    // another 3.5s, blowing the budget and crashing the call. Shortening the
+    // book timeout to make room introduces a worse race -- aborting at 2s
+    // while Cal.com commits at 3s means verification looks too early, finds
+    // nothing, and reproduces the same double-booking.
+    //
+    // So: hand the ambiguity back to the agent with an unmissable instruction.
+    // calcom_find_appointment is a SEPARATE tool call with its own fresh 5s
+    // budget, which is the only place the verification actually fits.
+    const looksLikeTimeout = /did not respond within|timed out|TimeoutError|ETIMEDOUT|aborted/i.test(message);
+    if (looksLikeTimeout) {
+      console.warn('[calcom/book-appointment] timeout -- outcome UNKNOWN, booking may exist:', {
+        conversation_id: conversationId,
+        start_iso: start.toUTC().toISO(),
+        name,
+        phone,
+        message,
+      });
+      return NextResponse.json(
+        {
+          ok: false,
+          status: 'unknown',
+          error:
+            'TIMEOUT -- the booking may or may not have been created. Do NOT offer another time ' +
+            'and do NOT try booking again yet. Call calcom_find_appointment first to check whether ' +
+            'this appointment already exists. Only book again if it does not.',
+        },
+        // 202, not 502: the request was accepted and may well have succeeded.
+        // A 5xx invites the agent to treat it as a hard failure, which is the
+        // exact misreading that caused the double-booking.
+        { status: 202 }
+      );
+    }
+
     // Best-effort detection of a Cal.com availability-conflict rejection --
     // not a documented, guaranteed error shape, just matching on wording
     // Cal.com is known to use. Worth re-checking against real conflict
