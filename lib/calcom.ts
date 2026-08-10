@@ -190,13 +190,38 @@ export interface BookedAppointment {
  * required in Cal.com's dashboard (Event Type -> Advanced -> Booking
  * questions) -- check there if a phone-only booking gets rejected.
  */
+/**
+ * Cal.com requires E.164 for attendee.phoneNumber and rejects anything else
+ * with a bare "invalid number". A caller speaking their number gives you
+ * "416-222-2323" -- no country code -- and the agent passes it straight
+ * through, so the booking fails and the agent starts asking the caller to
+ * repeat themselves. Observed on a real call 2026-08-10: three rounds of
+ * "that number seems invalid, could you check it?" before the caller
+ * happened to say "plus one" out loud.
+ *
+ * ⚠️ Assumes +1 (North America) when no country code is present. Revisit
+ * before taking calls from other regions -- a wrong country code is worse
+ * than none, since Cal.com will accept it and the number will be unreachable.
+ */
+export function toE164(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('+')) return '+' + trimmed.slice(1).replace(/\D/g, '');
+
+  const digits = trimmed.replace(/\D/g, '');
+  if (digits.length === 10) return `+1${digits}`;              // 4162947177
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`; // 14162947177
+  // Anything else: hand it over untouched and let Cal.com decide, rather than
+  // guessing at a country code we have no basis for.
+  return trimmed;
+}
+
 export async function bookAppointment(input: BookAppointmentInput): Promise<BookedAppointment> {
   const timeZone = getBusinessTimeZone();
   const eventTypeId = getEventTypeId();
 
   const attendee: Record<string, unknown> = { name: input.name, timeZone };
   if (input.email) attendee.email = input.email;
-  if (input.phone) attendee.phoneNumber = input.phone;
+  if (input.phone) attendee.phoneNumber = toE164(input.phone);
 
   const body: Record<string, unknown> = {
     start: input.startISO,
