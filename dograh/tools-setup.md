@@ -139,8 +139,30 @@ needed per turn instead of two.
 | Custom header | `x-agent-secret` = your `AGENT_TOOLS_SECRET` |
 | LLM Parameters | `last_question_id` (string, optional) — "The exact question_id this tool returned last time. Copy it back character for character. Omit on the very first call." · `answer` (string, optional) — "The caller's answer to that question, in their own words. Omit on the very first call." |
 | conversation_id | **No longer needed.** Leave it off. If an existing agent still sends one it is ignored except as a fallback for a call already in flight during a deploy. See "Per-call identity" below. |
-| Preset Parameters (outbound) | `spreadsheet_id` = `{{initial_context.spreadsheet_id}}` |
-| Preset Parameters (inbound) | `phone_number` = `{{initial_context.called_number}}` -- same lookup as `record_answer` above. |
+| Preset Parameters | ONE entry. Which one depends on the direction -- see below. |
+
+**Two tools, not one.** The dashboard has a single preset-parameter list per
+tool; there is no inbound/outbound switch inside it. And an unresolvable
+preset does not fall through quietly -- Dograh's template engine errors out
+with "resolved to an empty value" before the request reaches this app (the
+same failure that killed `{{workflow_run_id}}`). An inbound call has no
+`initial_context.spreadsheet_id`, so a tool carrying both presets breaks on
+every inbound call.
+
+So make one tool per direction, exactly like `get_next_question` and
+`get_next_question_inbound` already are:
+
+| Tool name | Preset Parameter |
+|---|---|
+| `get_next_screener_question` (outbound) | `spreadsheet_id` = `{{initial_context.spreadsheet_id}}` |
+| `get_next_screener_question_inbound` | `phone_number` = `{{initial_context.called_number}}` |
+
+Same URL, same description, same LLM parameters for both -- only the preset
+differs. The server needs no change either way: `resolveSpreadsheetId` accepts
+either and works out the rest.
+
+Build only the direction you actually use. Inbound first is usually faster to
+test, since the inbound number mapping is already in place.
 
 **Returns (next question):** `{ done: false, terminated: false, question_id: string, question: string }`
 **Returns (disqualified):** `{ done: true, terminated: true, closing_message: string }`
