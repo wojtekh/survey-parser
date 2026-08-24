@@ -70,8 +70,8 @@ function SurveyCreatedPanel({
   }
 
   return (
-    <div className="flags-panel" style={{ borderColor: '#a8d8b0', background: '#f0faf1' }}>
-      <h3 style={{ color: '#1f8a3f' }}>Survey created</h3>
+    <div className="panel-success">
+      <h3>Survey created</h3>
 
       {spreadsheetId && (
         <>
@@ -93,7 +93,7 @@ function SurveyCreatedPanel({
                 fontSize: 14,
                 padding: '8px 10px',
                 background: '#fff',
-                border: '1px solid #a8d8b0',
+                border: '1px solid var(--success-border)',
                 borderRadius: 6,
                 wordBreak: 'break-all',
                 // Select the whole id on a single click -- it's one opaque
@@ -252,7 +252,7 @@ function AgentPromptsPanel({
 
   return (
     <div className="stack">
-      <h2 style={{ fontSize: 16, margin: 0 }}>Agent prompts</h2>
+      <h2>Agent prompts</h2>
 
       {state === 'idle' && (
         <>
@@ -403,12 +403,12 @@ function AgentPromptsPanel({
           </div>
 
           {pushResult && (
-            <p style={{ fontSize: 13, color: '#1f8a3f', margin: 0 }}>{pushResult}</p>
+            <p style={{ fontSize: 13, color: 'var(--success-text)', margin: 0 }}>{pushResult}</p>
           )}
 
           {definition != null && (
-            <div className="flags-panel" style={{ borderColor: '#a8d8b0', background: '#f0faf1' }}>
-              <h3 style={{ color: '#1f8a3f' }}>Agent definition</h3>
+            <div className="panel-success">
+              <h3>Agent definition</h3>
               <p style={{ margin: '0 0 8px', fontSize: 12, color: 'var(--text-secondary)' }}>
                 Use <strong>Create in Dograh</strong> above unless it is unavailable. This is the
                 manual fallback: save it as <code>agent.json</code> and post it yourself. Never use
@@ -418,7 +418,7 @@ function AgentPromptsPanel({
                 style={{
                   fontSize: 11,
                   background: '#fff',
-                  border: '1px solid #a8d8b0',
+                  border: '1px solid var(--success-border)',
                   borderRadius: 6,
                   padding: 8,
                   overflowX: 'auto',
@@ -532,19 +532,19 @@ function SurveyRow({
                       <li key={q.id} style={{ marginBottom: 8 }}>
                         <div>{q.text}</div>
                         {q.skip_if && (
-                          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                          <span className="rule-skip">
                             <strong>Skip if:</strong> {q.skip_if}
-                          </div>
+                          </span>
                         )}
                         {q.terminate_if && (
-                          <div style={{ fontSize: 12, color: 'var(--danger)' }}>
+                          <span className="rule-terminate">
                             <strong>Terminate if:</strong> {q.terminate_if}
-                          </div>
+                          </span>
                         )}
                         {q.needs_review && (
-                          <div style={{ fontSize: 12, color: '#b8860b' }}>
+                          <span className="review-note">
                             <strong>Needs review:</strong> {q.review_note}
-                          </div>
+                          </span>
                         )}
                       </li>
                     ))}
@@ -887,6 +887,13 @@ export default function Home() {
 
   return (
     <>
+      <header id="parse" style={{ marginBottom: 24, scrollMarginTop: 24 }}>
+        <h1>New parse</h1>
+        <p style={{ margin: '6px 0 0', fontSize: 14, color: 'var(--text-secondary)' }}>
+          Upload a document and we turn it into a callable survey sheet.
+        </p>
+      </header>
+
       <form className="card stack" onSubmit={handleSubmit}>
         <div>
           <label htmlFor="name">Survey name (optional)</label>
@@ -1228,7 +1235,7 @@ export default function Home() {
       )}
 
       <div className="stack">
-        <h2 style={{ fontSize: 16, margin: 0 }}>Past surveys</h2>
+        <h2 id="surveys" style={{ scrollMarginTop: 24 }}>Past surveys</h2>
         {surveysError ? (
           <p className="error-text">{surveysError}</p>
         ) : surveys === null ? (
@@ -1253,7 +1260,7 @@ export default function Home() {
       </div>
 
       <div className="stack">
-        <h2 style={{ fontSize: 16, margin: 0 }}>Inbound numbers</h2>
+        <h2 id="numbers" style={{ scrollMarginTop: 24 }}>Inbound numbers</h2>
         <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0 }}>
           Which survey each inbound phone number is currently pointed at. Reassigning a number
           to a new survey is just changing it here -- no Dograh tool config needs touching, as

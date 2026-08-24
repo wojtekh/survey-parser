@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
+import RailNav from './RailNav';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -12,12 +12,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         <div className="app-shell">
-          <header className="app-header row">
-            <span>Survey Parser</span>
-            <Link href="/clients" style={{ fontSize: 13, fontWeight: 600 }}>
-              Clients
-            </Link>
-          </header>
+          <RailNav />
           <main className="app-main">{children}</main>
         </div>
       </body>
