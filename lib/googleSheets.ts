@@ -496,6 +496,16 @@ export interface AgentPromptRecord {
   end: string;
   /** get_next_screener_question's UUID from the Dograh dashboard, if known. */
   toolUuid?: string;
+  /**
+   * The Dograh agent this survey's prompts were last pushed to.
+   *
+   * Storing it is what makes a re-push an UPDATE instead of a new agent every
+   * time -- the same non-idempotency that sheets/push still has, avoided here
+   * because Dograh exposes PUT /workflow/{id}.
+   */
+  dograhWorkflowId?: number;
+  dograhWorkflowUuid?: string | null;
+  dograhPushedAt?: string;
   updatedAt: string;
 }
 

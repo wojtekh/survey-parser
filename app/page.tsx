@@ -151,6 +151,10 @@ function AgentPromptsPanel({
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [definition, setDefinition] = useState<unknown>(null);
   const [defCopied, setDefCopied] = useState(false);
+  const [workflowId, setWorkflowId] = useState<number | null>(null);
+  const [pushing, setPushing] = useState(false);
+  const [pushResult, setPushResult] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
 
   async function load() {
     setState('loading');
@@ -162,8 +166,10 @@ function AgentPromptsPanel({
       setAgent(body.prompts.agent ?? '');
       setEnd(body.prompts.end ?? '');
       setToolUuid(body.prompts.toolUuid ?? '');
-      setName(body.suggestedName ?? '');
+      setName(body.suggestedName ?? body.prompts.name ?? '');
       setSavedAt(body.saved ? body.prompts.updatedAt : null);
+      setWorkflowId(typeof body.prompts.dograhWorkflowId === 'number' ? body.prompts.dograhWorkflowId : null);
+      setDirty(false);
       setState('ready');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load the agent prompts.');
@@ -183,10 +189,35 @@ function AgentPromptsPanel({
       const body = await readJson(res, 'Could not save the agent prompts.');
       setSavedAt(body.prompts.updatedAt);
       setDefinition(body.definition);
+      setDirty(false);
       setState('ready');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save the agent prompts.');
       setState('ready');
+    }
+  }
+
+  async function pushToDograh() {
+    setPushing(true);
+    setError(null);
+    setPushResult(null);
+    try {
+      const res = await fetch(`/api/surveys/${encodeURIComponent(spreadsheetId)}/agent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const body = await readJson(res, 'Could not push the agent to Dograh.');
+      setWorkflowId(body.workflowId);
+      setPushResult(
+        body.action === 'created'
+          ? `Created agent ${body.workflowId} in Dograh.`
+          : `Updated agent ${body.workflowId} in Dograh.`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not push the agent to Dograh.');
+    } finally {
+      setPushing(false);
     }
   }
 
@@ -196,6 +227,11 @@ function AgentPromptsPanel({
     setDefCopied(true);
     setTimeout(() => setDefCopied(false), 1500);
   }
+
+  const edit = (setter: (v: string) => void) => (v: string) => {
+    setter(v);
+    setDirty(true);
+  };
 
   const field = (label: string, hint: string, value: string, onChange: (v: string) => void, rows: number) => (
     <div style={{ marginBottom: 12 }}>
@@ -243,15 +279,15 @@ function AgentPromptsPanel({
             <input value={name} onChange={(e) => setName(e.target.value)} style={{ width: '100%' }} />
           </div>
 
-          {field('Start node', 'The greeting, before any question.', start, setStart, 10)}
+          {field('Start node', 'The greeting, before any question.', start, edit(setStart), 10)}
           {field(
             'Agent node',
             'The loop. It tells the model to ask whatever get_next_screener_question returns and nothing else — the server owns the skip and terminate logic.',
             agent,
-            setAgent,
+            edit(setAgent),
             20
           )}
-          {field('End node', 'How to close, qualified or not.', end, setEnd, 10)}
+          {field('End node', 'How to close, qualified or not.', end, edit(setEnd), 10)}
 
           <div style={{ marginBottom: 12 }}>
             <label style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>
@@ -278,12 +314,46 @@ function AgentPromptsPanel({
             </button>
           </div>
 
+          <div
+            className="row"
+            style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}
+          >
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              {workflowId
+                ? `Dograh agent ${workflowId} — pushing updates it in place.`
+                : 'Not in Dograh yet.'}
+            </span>
+            <button
+              className="btn"
+              onClick={pushToDograh}
+              disabled={pushing || !savedAt || dirty}
+              title={
+                !savedAt
+                  ? 'Save the prompts first.'
+                  : dirty
+                    ? 'You have unsaved edits — save them first.'
+                    : undefined
+              }
+            >
+              {pushing
+                ? 'Pushing…'
+                : workflowId
+                  ? 'Update in Dograh'
+                  : 'Create in Dograh'}
+            </button>
+          </div>
+
+          {pushResult && (
+            <p style={{ fontSize: 13, color: '#1f8a3f', margin: 0 }}>{pushResult}</p>
+          )}
+
           {definition != null && (
             <div className="flags-panel" style={{ borderColor: '#a8d8b0', background: '#f0faf1' }}>
-              <h3 style={{ color: '#1f8a3f' }}>Agent definition ready</h3>
+              <h3 style={{ color: '#1f8a3f' }}>Agent definition</h3>
               <p style={{ margin: '0 0 8px', fontSize: 12, color: 'var(--text-secondary)' }}>
-                Save this as <code>agent.json</code>, then create the agent. Use the API, not the
-                dashboard&apos;s Upload Agent Definition — that one fails silently.
+                Use <strong>Create in Dograh</strong> above unless it is unavailable. This is the
+                manual fallback: save it as <code>agent.json</code> and post it yourself. Never use
+                the dashboard&apos;s Upload Agent Definition — that one fails silently.
               </p>
               <pre
                 style={{
