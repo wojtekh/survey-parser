@@ -10,6 +10,7 @@ import {
   generateAgentPrompts,
   buildAgentDefinition,
   DEFAULT_TOOL_NAME,
+  DEFAULT_INTERVIEWER_NAME,
 } from '@/lib/generateAgentPrompts';
 import type { ParsedScreener } from '@/lib/generateScreener';
 
@@ -35,10 +36,18 @@ export async function GET(
     }
 
     const screener = JSON.parse(await getScreenerRaw(spreadsheetId)) as ParsedScreener;
-    const generated = generateAgentPrompts(screener, DEFAULT_TOOL_NAME);
+    const generated = generateAgentPrompts(screener, {
+      toolName: DEFAULT_TOOL_NAME,
+      interviewerName: DEFAULT_INTERVIEWER_NAME,
+    });
     return NextResponse.json({
       saved: false,
-      prompts: { ...generated, toolName: DEFAULT_TOOL_NAME, updatedAt: '' },
+      prompts: {
+        ...generated,
+        toolName: DEFAULT_TOOL_NAME,
+        interviewerName: DEFAULT_INTERVIEWER_NAME,
+        updatedAt: '',
+      },
       suggestedName: screener.title,
     });
   } catch (err) {
@@ -84,6 +93,10 @@ export async function PUT(
       typeof body.toolName === 'string' && body.toolName.trim()
         ? body.toolName.trim()
         : DEFAULT_TOOL_NAME,
+    interviewerName:
+      typeof body.interviewerName === 'string' && body.interviewerName.trim()
+        ? body.interviewerName.trim()
+        : DEFAULT_INTERVIEWER_NAME,
     updatedAt: new Date().toISOString(),
   };
 

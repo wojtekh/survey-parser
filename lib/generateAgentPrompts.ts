@@ -41,28 +41,54 @@ export interface AgentPrompts {
   end: string;
 }
 
+/**
+ * The interviewer's name, spoken aloud in the opening.
+ *
+ * Recruiting scripts are written for a human reading them, so they carry a
+ * placeholder -- "Hello, my name is [NAME]". Nothing tells a voice agent that
+ * is a blank to fill, and it will happily say it out loud. Giving the agent
+ * a name and substituting the placeholder fixes both halves.
+ */
+export const DEFAULT_INTERVIEWER_NAME = 'Alex';
+
+/** Bracketed placeholders that mean "put the interviewer's name here". */
+const NAME_PLACEHOLDER = /\[[^\]]*\bname\b[^\]]*\]/gi;
+
 function firstOpening(screener: ParsedScreener) {
   return screener.openings?.[0] ?? null;
 }
 
+export interface PromptOptions {
+  /** Must match the tool's name in Dograh exactly. */
+  toolName?: string;
+  /** Spoken aloud, and substituted for any [NAME] placeholder in the script. */
+  interviewerName?: string;
+}
+
 export function generateAgentPrompts(
   screener: ParsedScreener,
-  toolName: string = DEFAULT_TOOL_NAME
+  opts: PromptOptions = {}
 ): AgentPrompts {
+  const toolName = opts.toolName || DEFAULT_TOOL_NAME;
+  const interviewerName = (opts.interviewerName || DEFAULT_INTERVIEWER_NAME).trim();
+  const fillName = (text: string) => text.replace(NAME_PLACEHOLDER, interviewerName);
   const opening = firstOpening(screener);
   const otherOpenings = (screener.openings ?? []).slice(1);
 
   const start = [
-    `You are opening a market research screener call for "${screener.title}".`,
+    `You are ${interviewerName}, a professional and friendly telephone interviewer`,
+    `conducting a market research screener call for "${screener.title}".`,
     '',
-    'Greet the caller warmly and deliver this opening. Keep the wording close to',
-    'this text -- the disclosures in it matter:',
+    'Speak warmly and conversationally, at a moderate pace.',
     '',
-    opening?.script?.trim() || '(No opening script was captured for this screener. Write one before using this agent.)',
+    'Greet the caller and deliver this opening. Keep the wording close to this',
+    'text -- the disclosures in it matter:',
+    '',
+    fillName(opening?.script?.trim() || '(No opening script was captured for this screener. Write one before using this agent.)'),
     '',
     'If the caller declines right here, before any questions, say:',
     '',
-    opening?.decline_response?.trim() || '(No decline response was captured. Write one before using this agent.)',
+    fillName(opening?.decline_response?.trim() || '(No decline response was captured. Write one before using this agent.)'),
     ...(otherOpenings.length
       ? [
           '',
@@ -97,11 +123,38 @@ export function generateAgentPrompts(
     '  this call from its own answers.',
     '- Never invent a question, never reorder, never skip one on your own',
     '  judgment. If you are unsure what to ask, call the tool again.',
-    '- Ask exactly one question at a time.',
-    '- Never guess an answer for the caller. If their reply is unclear, ask a',
-    '  short clarifying follow-up, then report what they actually said.',
+    '- Ask exactly one question at a time. Always wait for a reply before',
+    '  moving on.',
     '- Report the answer in the caller\'s own words. Do not tidy it into a',
     '  category -- the server classifies it.',
+    '',
+    'Answer handling:',
+    '- If a reply is unclear, ask a short clarifying follow-up. AT MOST TWICE.',
+    '  Then report what they actually said, however vague, and move on. Never',
+    '  keep pressing -- a caller stuck on one question hangs up.',
+    '- If the question offers a list of options and the caller can pick more',
+    '  than one, read their selections back to confirm before reporting them.',
+    '- If the caller changes their mind mid-answer ("yes... actually no"),',
+    '  report ONLY their final answer.',
+    '- If they say something that is not on the list, ask which listed option',
+    '  it is closest to. If still unclear after two tries, report their exact',
+    '  words and let the server decide.',
+    '- Never guess or invent an answer on their behalf.',
+    '',
+    'Situations that come up on real calls:',
+    `- Asked who is calling: give your name (${interviewerName}) and say you are`,
+    '  calling from a market research firm. Nothing further.',
+    '- Caller sounds under 18: do not decide anything yourself -- report it in',
+    '  the answer you send, and let the tool judge eligibility.',
+    '- Caller is hostile or abusive: say "I understand. Thank you for your time',
+    '  -- goodbye" and end the call.',
+    '- Caller asks to be called back: offer to continue now, or thank them and',
+    '  end the call warmly. Do not promise a specific callback time.',
+    '- You cannot understand each other after two attempts: thank them for',
+    '  their time and end the call.',
+    '- Caller answers a question you have not asked yet: acknowledge it briefly,',
+    '  then still ask the current question. The tool decides the order, not the',
+    '  caller and not you.',
     '',
     'Stopping:',
     '- When the tool returns done=true and terminated=true, stop asking',

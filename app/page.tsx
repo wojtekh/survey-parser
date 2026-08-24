@@ -149,6 +149,7 @@ function AgentPromptsPanel({
   const [name, setName] = useState('');
   const [toolUuid, setToolUuid] = useState('');
   const [toolName, setToolName] = useState('get_next_screener_question');
+  const [interviewerName, setInterviewerName] = useState('Alex');
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [definition, setDefinition] = useState<unknown>(null);
   const [defCopied, setDefCopied] = useState(false);
@@ -168,6 +169,7 @@ function AgentPromptsPanel({
       setEnd(body.prompts.end ?? '');
       setToolUuid(body.prompts.toolUuid ?? '');
       setToolName(body.prompts.toolName ?? 'get_next_screener_question');
+      setInterviewerName(body.prompts.interviewerName ?? 'Alex');
       setName(body.suggestedName ?? body.prompts.name ?? '');
       setSavedAt(body.saved ? body.prompts.updatedAt : null);
       setWorkflowId(typeof body.prompts.dograhWorkflowId === 'number' ? body.prompts.dograhWorkflowId : null);
@@ -186,7 +188,7 @@ function AgentPromptsPanel({
       const res = await fetch(`/api/surveys/${encodeURIComponent(spreadsheetId)}/prompts`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start, agent, end, toolUuid, toolName, name }),
+        body: JSON.stringify({ start, agent, end, toolUuid, toolName, interviewerName, name }),
       });
       const body = await readJson(res, 'Could not save the agent prompts.');
       setSavedAt(body.prompts.updatedAt);
@@ -276,10 +278,39 @@ function AgentPromptsPanel({
         <>
           {error && <p className="error-text">{error}</p>}
 
-          <div style={{ marginBottom: 12 }}>
-            <label style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>Agent name</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} style={{ width: '100%' }} />
+          <div className="row" style={{ gap: 12, marginBottom: 12 }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>Agent name</label>
+              <p style={{ margin: '2px 0 4px', fontSize: 12, color: 'var(--text-secondary)' }}>
+                How it is listed in Dograh. Never spoken.
+              </p>
+              <input value={name} onChange={(e) => setName(e.target.value)} style={{ width: '100%' }} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>
+                Interviewer name
+              </label>
+              <p style={{ margin: '2px 0 4px', fontSize: 12, color: 'var(--text-secondary)' }}>
+                Spoken aloud, and fills any <code>[NAME]</code> placeholder in the script.
+              </p>
+              <input
+                value={interviewerName}
+                onChange={(e) => {
+                  setInterviewerName(e.target.value);
+                  setDirty(true);
+                }}
+                style={{ width: '100%' }}
+              />
+            </div>
           </div>
+
+          {/^[\s\S]*\[[^\]]*\bname\b[^\]]*\]/i.test(start) && (
+            <p className="error-text" style={{ fontSize: 12, marginTop: -4, marginBottom: 12 }}>
+              The start prompt still contains a <code>[NAME]</code>-style placeholder. Nothing tells
+              the agent it is a blank — it will read it aloud. Regenerate the prompts, or replace it
+              by hand.
+            </p>
+          )}
 
           {field('Start node', 'The greeting, before any question.', start, edit(setStart), 10)}
           {field(

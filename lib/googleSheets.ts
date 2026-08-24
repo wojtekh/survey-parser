@@ -501,6 +501,8 @@ export interface AgentPromptRecord {
    * call. Must match exactly -- a mismatch fails mid-call, not at deploy.
    */
   toolName?: string;
+  /** Spoken aloud in the opening, and used to fill any [NAME] placeholder. */
+  interviewerName?: string;
   /**
    * The Dograh agent this survey's prompts were last pushed to.
    *

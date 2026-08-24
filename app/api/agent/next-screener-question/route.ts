@@ -19,7 +19,7 @@ export const runtime = 'nodejs';
  * rather than leaving the agent to improvise an explanation.
  */
 const DEFAULT_TERMINATE_MESSAGE =
-  "I'm sorry, it looks like you don't qualify for this particular study. Thank you very much for your time.";
+  "Thank you for your time today. Unfortunately, based on your answers, you don't qualify for this particular study -- but we truly appreciate your participation. Have a wonderful day.";
 
 // POST /api/agent/next-screener-question
 // { conversation_id, spreadsheet_id, last_question_id?, answer? }  -- outbound
