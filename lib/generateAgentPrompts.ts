@@ -17,6 +17,21 @@ import type { ParsedScreener } from '@/lib/generateScreener';
 // all of that. The agent only has to ask what it is handed and report the
 // answer, so the prompt says that and stops.
 
+/**
+ * The tool name the prompt tells the model to call.
+ *
+ * This MUST match the tool's name in the Dograh dashboard exactly. It is a
+ * setting rather than a constant because the name is not ours to choose --
+ * a tool is created by hand per direction (inbound vs outbound need separate
+ * tools, since the preset parameter differs), so the same survey can face a
+ * tool called `get_next_screener_question_inbound`.
+ *
+ * A mismatch does not fail loudly at build or deploy time. It fails mid-call,
+ * as "The function X is not currently available", after the caller has
+ * already heard the opening.
+ */
+export const DEFAULT_TOOL_NAME = 'get_next_screener_question';
+
 export interface AgentPrompts {
   /** startCall node -- the greeting, before any question. */
   start: string;
@@ -30,7 +45,10 @@ function firstOpening(screener: ParsedScreener) {
   return screener.openings?.[0] ?? null;
 }
 
-export function generateAgentPrompts(screener: ParsedScreener): AgentPrompts {
+export function generateAgentPrompts(
+  screener: ParsedScreener,
+  toolName: string = DEFAULT_TOOL_NAME
+): AgentPrompts {
   const opening = firstOpening(screener);
   const otherOpenings = (screener.openings ?? []).slice(1);
 
@@ -59,12 +77,12 @@ export function generateAgentPrompts(screener: ParsedScreener): AgentPrompts {
 
   const agent = [
     'You are running a screener call. You do NOT decide which question comes',
-    'next, and you do NOT decide who qualifies. The get_next_screener_question',
+    `next, and you do NOT decide who qualifies. The ${toolName}`,
     'tool decides both. Your job is to ask what it hands you and report what',
     'you hear back.',
     '',
     'The loop:',
-    '1. Call get_next_screener_question with no last_question_id and no answer.',
+    `1. Call ${toolName} with no last_question_id and no answer.`,
     '   It returns the first question.',
     '2. Ask that question. Rephrase only as much as it takes to sound natural',
     '   spoken aloud -- never change its meaning or its answer options.',
@@ -130,6 +148,7 @@ export function buildAgentDefinition(input: {
   name: string;
   prompts: AgentPrompts;
   toolUuid?: string;
+  toolName?: string;
 }) {
   return {
     name: input.name,
@@ -182,9 +201,13 @@ export function buildAgentDefinition(input: {
           source: 'ask-1',
           target: 'end-1',
           data: {
-            label: 'Screener complete or caller disqualified',
+            // Dograh turns an edge label into a callable function name --
+            // "Begin screener" reaches the model as begin_screener(). Keep
+            // labels short and identifier-shaped; a long sentence here
+            // becomes a long function name for the model to reproduce.
+            label: 'Finish screener',
             condition:
-              'The get_next_screener_question tool has returned done=true -- either the caller was disqualified (terminated=true) or the screener finished and the invitation was read -- or the caller wants to end the call early.',
+              `The ${input.toolName ?? DEFAULT_TOOL_NAME} tool has returned done=true -- either the caller was disqualified (terminated=true) or the screener finished and the invitation was read -- or the caller wants to end the call early.`,
           },
         },
       ],

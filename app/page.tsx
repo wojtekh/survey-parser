@@ -148,6 +148,7 @@ function AgentPromptsPanel({
   const [end, setEnd] = useState('');
   const [name, setName] = useState('');
   const [toolUuid, setToolUuid] = useState('');
+  const [toolName, setToolName] = useState('get_next_screener_question');
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [definition, setDefinition] = useState<unknown>(null);
   const [defCopied, setDefCopied] = useState(false);
@@ -166,6 +167,7 @@ function AgentPromptsPanel({
       setAgent(body.prompts.agent ?? '');
       setEnd(body.prompts.end ?? '');
       setToolUuid(body.prompts.toolUuid ?? '');
+      setToolName(body.prompts.toolName ?? 'get_next_screener_question');
       setName(body.suggestedName ?? body.prompts.name ?? '');
       setSavedAt(body.saved ? body.prompts.updatedAt : null);
       setWorkflowId(typeof body.prompts.dograhWorkflowId === 'number' ? body.prompts.dograhWorkflowId : null);
@@ -184,7 +186,7 @@ function AgentPromptsPanel({
       const res = await fetch(`/api/surveys/${encodeURIComponent(spreadsheetId)}/prompts`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start, agent, end, toolUuid, name }),
+        body: JSON.stringify({ start, agent, end, toolUuid, toolName, name }),
       });
       const body = await readJson(res, 'Could not save the agent prompts.');
       setSavedAt(body.prompts.updatedAt);
@@ -291,7 +293,33 @@ function AgentPromptsPanel({
 
           <div style={{ marginBottom: 12 }}>
             <label style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>
-              get_next_screener_question tool UUID
+              Screener tool name
+            </label>
+            <p style={{ margin: '2px 0 4px', fontSize: 12, color: 'var(--text-secondary)' }}>
+              Must match the tool&apos;s name in Dograh exactly. Inbound and outbound need
+              separate tools, so this is often <code>…_inbound</code>.
+            </p>
+            <input
+              value={toolName}
+              onChange={(e) => {
+                setToolName(e.target.value);
+                setDirty(true);
+              }}
+              style={{ width: '100%', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
+            />
+            {toolName.trim() && !agent.includes(toolName.trim()) && (
+              <p className="error-text" style={{ fontSize: 12, marginTop: 4 }}>
+                The agent prompt never mentions <code>{toolName.trim()}</code>. The model will
+                call whatever name the prompt uses, and a name Dograh does not have fails
+                mid-call — after the caller has heard the opening. Fix the name here or the
+                prompt above so they match.
+              </p>
+            )}
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>
+              Screener tool UUID
             </label>
             <p style={{ margin: '2px 0 4px', fontSize: 12, color: 'var(--text-secondary)' }}>
               Copy it from the Dograh dashboard. Optional — leave it blank and attach the tool to

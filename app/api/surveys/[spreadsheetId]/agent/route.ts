@@ -49,6 +49,7 @@ export async function POST(
     name,
     prompts: record,
     toolUuid: record.toolUuid,
+    toolName: record.toolName,
   });
 
   const existingId = record.dograhWorkflowId;

@@ -494,8 +494,13 @@ export interface AgentPromptRecord {
   start: string;
   agent: string;
   end: string;
-  /** get_next_screener_question's UUID from the Dograh dashboard, if known. */
+  /** The screener tool's UUID from the Dograh dashboard, if known. */
   toolUuid?: string;
+  /**
+   * The screener tool's NAME in Dograh, which the prompt tells the model to
+   * call. Must match exactly -- a mismatch fails mid-call, not at deploy.
+   */
+  toolName?: string;
   /**
    * The Dograh agent this survey's prompts were last pushed to.
    *

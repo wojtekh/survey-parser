@@ -6,7 +6,11 @@ import {
   normalizeSpreadsheetId,
   type AgentPromptRecord,
 } from '@/lib/googleSheets';
-import { generateAgentPrompts, buildAgentDefinition } from '@/lib/generateAgentPrompts';
+import {
+  generateAgentPrompts,
+  buildAgentDefinition,
+  DEFAULT_TOOL_NAME,
+} from '@/lib/generateAgentPrompts';
 import type { ParsedScreener } from '@/lib/generateScreener';
 
 export const runtime = 'nodejs';
@@ -31,10 +35,10 @@ export async function GET(
     }
 
     const screener = JSON.parse(await getScreenerRaw(spreadsheetId)) as ParsedScreener;
-    const generated = generateAgentPrompts(screener);
+    const generated = generateAgentPrompts(screener, DEFAULT_TOOL_NAME);
     return NextResponse.json({
       saved: false,
-      prompts: { ...generated, updatedAt: '' },
+      prompts: { ...generated, toolName: DEFAULT_TOOL_NAME, updatedAt: '' },
       suggestedName: screener.title,
     });
   } catch (err) {
@@ -76,6 +80,10 @@ export async function PUT(
     ...(typeof body.toolUuid === 'string' && body.toolUuid.trim()
       ? { toolUuid: body.toolUuid.trim() }
       : {}),
+    toolName:
+      typeof body.toolName === 'string' && body.toolName.trim()
+        ? body.toolName.trim()
+        : DEFAULT_TOOL_NAME,
     updatedAt: new Date().toISOString(),
   };
 
@@ -85,6 +93,7 @@ export async function PUT(
       name: typeof body.name === 'string' && body.name.trim() ? body.name.trim() : 'Screener Agent',
       prompts: record,
       toolUuid: record.toolUuid,
+      toolName: record.toolName,
     });
     return NextResponse.json({ ok: true, prompts: record, definition });
   } catch (err) {
