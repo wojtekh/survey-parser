@@ -134,7 +134,13 @@ function SurveyCreatedPanel({
  * Prompts are saved to the survey's own sheet (a "prompts" tab), so an edit
  * survives a reload and can be revised later without re-parsing the document.
  */
-function AgentPromptsPanel({ spreadsheetId }: { spreadsheetId: string }) {
+function AgentPromptsPanel({
+  spreadsheetId,
+  hasSaved,
+}: {
+  spreadsheetId: string;
+  hasSaved?: boolean;
+}) {
   const [state, setState] = useState<'idle' | 'loading' | 'ready' | 'saving'>('idle');
   const [error, setError] = useState<string | null>(null);
   const [start, setStart] = useState('');
@@ -211,13 +217,14 @@ function AgentPromptsPanel({ spreadsheetId }: { spreadsheetId: string }) {
       {state === 'idle' && (
         <>
           <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
-            Generate the three Dograh node prompts for this screener, adjust them, then take the
-            agent definition to Dograh. Nothing is created remotely from here.
+            {hasSaved
+              ? 'Prompts were saved for this survey. Open them to review or revise.'
+              : 'Generate the three Dograh node prompts for this screener, adjust them, then take the agent definition to Dograh. Nothing is created remotely from here.'}
           </p>
           {error && <p className="error-text">{error}</p>}
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn btn-primary" onClick={load}>
-              Generate agent prompts
+              {hasSaved ? 'Open agent prompts' : 'Generate agent prompts'}
             </button>
           </div>
         </>
@@ -307,12 +314,161 @@ function AgentPromptsPanel({ spreadsheetId }: { spreadsheetId: string }) {
   );
 }
 
+/**
+ * One row in "Past surveys", expandable in place.
+ *
+ * Before this, a survey pushed in an earlier session was a name and a link and
+ * nothing else: the parsed questions and the agent prompts only ever existed
+ * in the React state of the tab that pushed them. Getting back to them meant
+ * re-parsing the document -- another model call, and a SECOND spreadsheet,
+ * because sheets/push always creates a new one.
+ *
+ * Everything shown here was already in the sheet. It just had no reader.
+ */
+function SurveyRow({
+  survey,
+  deleting,
+  onDelete,
+}: {
+  survey: SurveyIndexEntry;
+  deleting: boolean;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [detail, setDetail] = useState<SurveyDetail | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function toggle() {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setOpen(true);
+    if (detail || loading) return; // already loaded once -- the sheet isn't re-read on every toggle
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/surveys/${encodeURIComponent(survey.spreadsheetId)}`);
+      setDetail(await readJson(res, 'Could not load this survey.'));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load this survey.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="question-item" style={{ display: 'block' }}>
+      <div className="row">
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>{survey.name}</div>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            {survey.spreadsheetId} ·{' '}
+            {survey.createdAt ? new Date(survey.createdAt).toLocaleString() : ''}
+          </div>
+        </div>
+        <div className="row" style={{ gap: 8, width: 'auto' }}>
+          <button className="btn" onClick={toggle}>
+            {open ? 'Hide' : 'Details'}
+          </button>
+          <a href={survey.url} target="_blank" rel="noreferrer" className="btn">
+            Open sheet
+          </a>
+          <button
+            className="btn"
+            style={{ color: 'var(--danger)' }}
+            disabled={deleting}
+            onClick={onDelete}
+          >
+            {deleting ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
+      </div>
+
+      {open && (
+        <div className="stack" style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+          {loading && <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Loading…</p>}
+          {error && <p className="error-text">{error}</p>}
+
+          {detail && (
+            <>
+              {detail.screener ? (
+                <div>
+                  <h3 style={{ fontSize: 14, margin: '0 0 8px' }}>
+                    Screener — {detail.screener.questions.length} questions
+                  </h3>
+                  <ol style={{ margin: 0, paddingLeft: 20, fontSize: 13 }}>
+                    {detail.screener.questions.map((q) => (
+                      <li key={q.id} style={{ marginBottom: 8 }}>
+                        <div>{q.text}</div>
+                        {q.skip_if && (
+                          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                            <strong>Skip if:</strong> {q.skip_if}
+                          </div>
+                        )}
+                        {q.terminate_if && (
+                          <div style={{ fontSize: 12, color: 'var(--danger)' }}>
+                            <strong>Terminate if:</strong> {q.terminate_if}
+                          </div>
+                        )}
+                        {q.needs_review && (
+                          <div style={{ fontSize: 12, color: '#b8860b' }}>
+                            <strong>Needs review:</strong> {q.review_note}
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              ) : (
+                <div>
+                  <h3 style={{ fontSize: 14, margin: '0 0 8px' }}>
+                    Questions — {detail.questions.length}
+                  </h3>
+                  <ol style={{ margin: 0, paddingLeft: 20, fontSize: 13 }}>
+                    {detail.questions.map((q, i) => (
+                      <li key={i} style={{ marginBottom: 4 }}>
+                        {q}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+
+              {detail.screener ? (
+                <AgentPromptsPanel
+                  spreadsheetId={survey.spreadsheetId}
+                  hasSaved={detail.hasPrompts}
+                />
+              ) : (
+                <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0 }}>
+                  Agent prompts are generated from a screener&apos;s skip and terminate logic, so
+                  they only apply to surveys pushed through the screener flow.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 type SurveyType = 'simple' | 'screener';
 
 interface ParsedResult {
   title: string;
   questions: string[];
   flags: string[];
+}
+
+interface SurveyDetail {
+  spreadsheetId: string;
+  questions: string[];
+  screener: ParsedScreener | null;
+  hasPrompts: boolean;
+  promptsUpdatedAt: string | null;
 }
 
 interface SurveyIndexEntry {
@@ -955,27 +1111,12 @@ export default function Home() {
         ) : (
           <div className="stack" style={{ gap: 8 }}>
             {surveys.map((s) => (
-              <div key={s.spreadsheetId} className="question-item row">
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 14 }}>{s.name}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                    {s.spreadsheetId} · {s.createdAt ? new Date(s.createdAt).toLocaleString() : ''}
-                  </div>
-                </div>
-                <div className="row" style={{ gap: 8, width: 'auto' }}>
-                  <a href={s.url} target="_blank" rel="noreferrer" className="btn">
-                    Open sheet
-                  </a>
-                  <button
-                    className="btn"
-                    style={{ color: 'var(--danger)' }}
-                    disabled={deletingId === s.spreadsheetId}
-                    onClick={() => deleteSurvey(s.spreadsheetId, s.name)}
-                  >
-                    {deletingId === s.spreadsheetId ? 'Deleting…' : 'Delete'}
-                  </button>
-                </div>
-              </div>
+              <SurveyRow
+                key={s.spreadsheetId}
+                survey={s}
+                deleting={deletingId === s.spreadsheetId}
+                onDelete={() => deleteSurvey(s.spreadsheetId, s.name)}
+              />
             ))}
           </div>
         )}

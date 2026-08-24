@@ -534,6 +534,19 @@ export async function getPrompts(spreadsheetId: string): Promise<AgentPromptReco
   return JSON.parse(value) as AgentPromptRecord;
 }
 
+/**
+ * Same as getScreenerRaw, but returns null when no screener was ever pushed
+ * (a simple, non-screener survey) instead of throwing.
+ *
+ * This does NOT reintroduce the swallow pattern: readRangeOrEmpty absorbs
+ * only a tab that does not exist. A 403, 404 or outage still throws from
+ * inside it, before this function ever sees a value.
+ */
+export async function getScreenerRawOptional(spreadsheetId: string): Promise<string | null> {
+  const data = await readRangeOrEmpty(`${SHEETS_BASE}/${spreadsheetId}/values/${SCREENER_TAB}!A1`);
+  return data?.values?.[0]?.[0] ?? null;
+}
+
 export interface SurveyIndexEntry {
   spreadsheetId: string;
   name: string;
