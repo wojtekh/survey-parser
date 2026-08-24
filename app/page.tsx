@@ -86,6 +86,10 @@ export default function Home() {
   const [surveys, setSurveys] = useState<SurveyIndexEntry[] | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Set when the survey list itself fails to load. Kept separate from
+  // deleteError so a failed LOAD can never be mistaken for an empty list --
+  // that confusion is the whole bug this replaces.
+  const [surveysError, setSurveysError] = useState<string | null>(null);
 
   // Inbound number -> survey mappings ("one number, reassigned per
   // survey" -- and now, since Dograh's inbound tools resolve spreadsheet_id
@@ -96,12 +100,24 @@ export default function Home() {
   const [newNumberSurveyId, setNewNumberSurveyId] = useState('');
   const [savingNumber, setSavingNumber] = useState<string | null>(null); // phoneNumber being saved/removed
   const [inboundError, setInboundError] = useState<string | null>(null);
+  /** Same idea as surveysError, for the inbound-number list. */
+  const [inboundLoadError, setInboundLoadError] = useState<string | null>(null);
 
-  function loadInboundMappings() {
-    fetch('/api/inbound-numbers')
-      .then((res) => res.json())
-      .then((body) => setInboundMappings(body.mappings ?? []))
-      .catch(() => setInboundMappings([]));
+  // Both loaders used to end in `.catch(() => [])`, which rendered a failed
+  // load as an empty list -- indistinguishable from "you have none yet".
+  // A load that fails now says so.
+  async function loadInboundMappings() {
+    try {
+      const res = await fetch('/api/inbound-numbers');
+      const body = await readJson(res, 'Could not load the inbound numbers.');
+      setInboundMappings(body.mappings ?? []);
+      setInboundLoadError(null);
+    } catch (err) {
+      setInboundMappings([]);
+      setInboundLoadError(
+        err instanceof Error ? err.message : 'Could not load the inbound numbers.'
+      );
+    }
   }
 
   async function saveInboundMapping(phoneNumber: string, spreadsheetId: string) {
@@ -168,11 +184,16 @@ export default function Home() {
     }
   }
 
-  function loadSurveys() {
-    fetch('/api/surveys')
-      .then((res) => res.json())
-      .then((body) => setSurveys(body.surveys ?? []))
-      .catch(() => setSurveys([]));
+  async function loadSurveys() {
+    try {
+      const res = await fetch('/api/surveys');
+      const body = await readJson(res, 'Could not load your surveys.');
+      setSurveys(body.surveys ?? []);
+      setSurveysError(null);
+    } catch (err) {
+      setSurveys([]);
+      setSurveysError(err instanceof Error ? err.message : 'Could not load your surveys.');
+    }
   }
 
   useEffect(() => {
@@ -663,7 +684,9 @@ export default function Home() {
 
       <div className="stack">
         <h2 style={{ fontSize: 16, margin: 0 }}>Past surveys</h2>
-        {surveys === null ? (
+        {surveysError ? (
+          <p className="error-text">{surveysError}</p>
+        ) : surveys === null ? (
           <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Loading…</p>
         ) : surveys.length === 0 ? (
           <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
@@ -711,7 +734,9 @@ export default function Home() {
 
         {inboundError && <p className="error-text">{inboundError}</p>}
 
-        {inboundMappings === null ? (
+        {inboundLoadError ? (
+          <p className="error-text">{inboundLoadError}</p>
+        ) : inboundMappings === null ? (
           <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Loading…</p>
         ) : inboundMappings.length === 0 ? (
           <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>

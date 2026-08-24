@@ -108,6 +108,26 @@ function getIndexSheetId(): string {
   return normalizeSpreadsheetId(raw);
 }
 
+/**
+ * A failed Google API call, carrying the HTTP status as a number.
+ *
+ * The status used to live only inside the message string. That forced every
+ * caller into the same all-or-nothing choice: swallow every failure, or
+ * swallow none. They all chose to swallow every failure, which is how a 403
+ * ended up rendering as an empty survey list. With the status on the object,
+ * a caller can treat one specific status as "nothing here yet" and let every
+ * other one through.
+ */
+export class GoogleApiError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string
+  ) {
+    super(message);
+    this.name = 'GoogleApiError';
+  }
+}
+
 async function authedFetch(url: string, init?: RequestInit): Promise<any> {
   const client = getAuthClient();
   const { token } = await client.getAccessToken();
@@ -121,9 +141,45 @@ async function authedFetch(url: string, init?: RequestInit): Promise<any> {
   });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`Google API error (${res.status}) on ${init?.method ?? 'GET'} ${url}: ${body}`);
+    throw new GoogleApiError(
+      res.status,
+      `Google API error (${res.status}) on ${init?.method ?? 'GET'} ${url}: ${body}`
+    );
   }
   return res.json();
+}
+
+/**
+ * Read a range from a tab that may not exist yet.
+ *
+ * Asking for a tab Google hasn't got answers 400 "Unable to parse range".
+ * On a brand-new index sheet that is not a failure -- it genuinely means
+ * "nothing here yet", and an empty result is the correct answer.
+ *
+ * Every other outcome -- 403 revoked access, 404 wrong spreadsheet id, 5xx
+ * outage -- is a real failure and must reach the caller. Each of these call
+ * sites used to end in `.catch(() => null)`, which treated all of them as
+ * "nothing here yet". That is how a revoked service account rendered as a
+ * calm, convincing "no surveys yet" instead of an error.
+ *
+ * The match is deliberately narrow: status AND message. If Google ever
+ * rewords that string, this starts throwing on a first run instead of
+ * returning empty. That is the safe direction to fail -- loud and easy to
+ * spot, rather than silent and wrong.
+ */
+async function readRangeOrEmpty(url: string): Promise<any | null> {
+  try {
+    return await authedFetch(url);
+  } catch (err) {
+    if (
+      err instanceof GoogleApiError &&
+      err.status === 400 &&
+      /unable to parse range/i.test(err.message)
+    ) {
+      return null;
+    }
+    throw err;
+  }
 }
 
 /** Create a brand-new spreadsheet with "questions" and "responses" tabs, headers pre-filled. */
@@ -362,9 +418,7 @@ export async function writeFields(spreadsheetId: string, fields: SurveyField[]):
 
 /** Read back a survey's field list. Throws if none was ever pushed. */
 export async function getFields(spreadsheetId: string): Promise<SurveyField[]> {
-  const data = await authedFetch(`${SHEETS_BASE}/${spreadsheetId}/values/${FIELDS_TAB}!A1`).catch(
-    () => null
-  );
+  const data = await readRangeOrEmpty(`${SHEETS_BASE}/${spreadsheetId}/values/${FIELDS_TAB}!A1`);
   const value: string | undefined = data?.values?.[0]?.[0];
   if (!value) {
     throw new Error(
@@ -415,9 +469,7 @@ export async function writeScreener(spreadsheetId: string, screener: unknown): P
 
 /** Read back a screener's raw JSON string. Throws if none was ever pushed. */
 export async function getScreenerRaw(spreadsheetId: string): Promise<string> {
-  const data = await authedFetch(`${SHEETS_BASE}/${spreadsheetId}/values/${SCREENER_TAB}!A1`).catch(
-    () => null
-  );
+  const data = await readRangeOrEmpty(`${SHEETS_BASE}/${spreadsheetId}/values/${SCREENER_TAB}!A1`);
   const value: string | undefined = data?.values?.[0]?.[0];
   if (!value) {
     throw new Error(
@@ -456,9 +508,7 @@ async function ensureIndexHeader(): Promise<void> {
     });
   }
 
-  const data = await authedFetch(`${SHEETS_BASE}/${indexId}/values/${INDEX_TAB}!A1:D1`).catch(
-    () => null
-  );
+  const data = await readRangeOrEmpty(`${SHEETS_BASE}/${indexId}/values/${INDEX_TAB}!A1:D1`);
   if (data?.values?.length) return;
 
   await authedFetch(`${SHEETS_BASE}/${indexId}/values/${INDEX_TAB}!A1:D1?valueInputOption=RAW`, {
@@ -495,9 +545,7 @@ export async function removeSurveyFromIndex(spreadsheetId: string): Promise<void
   );
   if (!sheetMeta) return; // no "surveys" tab at all yet -- nothing to remove
 
-  const data = await authedFetch(`${SHEETS_BASE}/${indexId}/values/${INDEX_TAB}!A:A`).catch(
-    () => null
-  );
+  const data = await readRangeOrEmpty(`${SHEETS_BASE}/${indexId}/values/${INDEX_TAB}!A:A`);
   const values: string[][] = data?.values ?? [];
   // Row 0 is the header ("spreadsheet_id", ...); data starts at row index 1.
   const rowIndex = values.findIndex((row, i) => i > 0 && row[0] === spreadsheetId);
@@ -532,9 +580,7 @@ export async function trashSpreadsheet(spreadsheetId: string): Promise<void> {
 
 export async function listSurveys(): Promise<SurveyIndexEntry[]> {
   const indexId = getIndexSheetId();
-  const data = await authedFetch(`${SHEETS_BASE}/${indexId}/values/${INDEX_TAB}!A2:D10000`).catch(
-    () => null
-  );
+  const data = await readRangeOrEmpty(`${SHEETS_BASE}/${indexId}/values/${INDEX_TAB}!A2:D10000`);
   const values: string[][] = data?.values ?? [];
   return values
     .filter((row) => row[0])
@@ -583,9 +629,7 @@ async function ensureInboundHeader(): Promise<void> {
     });
   }
 
-  const data = await authedFetch(`${SHEETS_BASE}/${indexId}/values/${INBOUND_TAB}!A1:C1`).catch(
-    () => null
-  );
+  const data = await readRangeOrEmpty(`${SHEETS_BASE}/${indexId}/values/${INBOUND_TAB}!A1:C1`);
   if (data?.values?.length) return;
 
   await authedFetch(`${SHEETS_BASE}/${indexId}/values/${INBOUND_TAB}!A1:C1?valueInputOption=RAW`, {
@@ -610,9 +654,7 @@ export async function getActiveSurveyForNumber(phoneNumber: string): Promise<str
   }
 
   const indexId = getIndexSheetId();
-  const data = await authedFetch(`${SHEETS_BASE}/${indexId}/values/${INBOUND_TAB}!A2:C10000`).catch(
-    () => null
-  );
+  const data = await readRangeOrEmpty(`${SHEETS_BASE}/${indexId}/values/${INBOUND_TAB}!A2:C10000`);
   const values: string[][] = data?.values ?? [];
   const row = values.find((r) => r[0] === phoneNumber);
   const resolved = row?.[1] ?? null;
@@ -628,9 +670,7 @@ export async function setActiveSurveyForNumber(
   await ensureInboundHeader();
   const indexId = getIndexSheetId();
 
-  const data = await authedFetch(`${SHEETS_BASE}/${indexId}/values/${INBOUND_TAB}!A2:C10000`).catch(
-    () => null
-  );
+  const data = await readRangeOrEmpty(`${SHEETS_BASE}/${indexId}/values/${INBOUND_TAB}!A2:C10000`);
   const values: string[][] = data?.values ?? [];
   const rowIndex = values.findIndex((r) => r[0] === phoneNumber);
   const updatedAt = new Date().toISOString();
@@ -670,9 +710,7 @@ export async function removeInboundMapping(phoneNumber: string): Promise<void> {
     return;
   }
 
-  const data = await authedFetch(`${SHEETS_BASE}/${indexId}/values/${INBOUND_TAB}!A:A`).catch(
-    () => null
-  );
+  const data = await readRangeOrEmpty(`${SHEETS_BASE}/${indexId}/values/${INBOUND_TAB}!A:A`);
   const values: string[][] = data?.values ?? [];
   const rowIndex = values.findIndex((row, i) => i > 0 && row[0] === phoneNumber);
   if (rowIndex === -1) {
@@ -702,9 +740,7 @@ export async function removeInboundMapping(phoneNumber: string): Promise<void> {
 
 export async function listInboundMappings(): Promise<InboundMapping[]> {
   const indexId = getIndexSheetId();
-  const data = await authedFetch(`${SHEETS_BASE}/${indexId}/values/${INBOUND_TAB}!A2:C10000`).catch(
-    () => null
-  );
+  const data = await readRangeOrEmpty(`${SHEETS_BASE}/${indexId}/values/${INBOUND_TAB}!A2:C10000`);
   const values: string[][] = data?.values ?? [];
   return values
     .filter((row) => row[0])
