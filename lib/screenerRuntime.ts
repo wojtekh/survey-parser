@@ -50,6 +50,43 @@ export interface NextDecision {
 }
 
 /**
+ * How long the classification call gets before we stop waiting.
+ *
+ * Dograh's function-call timeout is a hard 5 seconds. When it fires, the
+ * caller hears dead air and the agent improvises -- and the request usually
+ * COMPLETED on our side a moment later, so the retry writes the answer a
+ * second time. Missing the deadline is worse than a slightly worse decision.
+ *
+ * 3.2s leaves room for the Sheets append running alongside, plus network.
+ */
+const CLASSIFY_DEADLINE_MS = 3200;
+
+/**
+ * Replay cache for one turn, keyed by session + the question being answered.
+ *
+ * Dograh retries a timed-out tool call with identical arguments. Without
+ * this, the retry re-runs the classification AND appends the answer to the
+ * responses tab again -- a duplicate row, and a duplicated entry in the
+ * history that feeds later skip/terminate decisions.
+ *
+ * Keyed on the turn rather than the session so a genuine re-answer of a
+ * DIFFERENT question is never suppressed.
+ */
+const turnCache = new Map<string, NextDecision>();
+
+function turnKey(sessionId: string, questionId: string): string {
+  return `${sessionId}::${questionId}`;
+}
+
+export function getCachedTurn(sessionId: string, questionId: string): NextDecision | null {
+  return turnCache.get(turnKey(sessionId, questionId)) ?? null;
+}
+
+export function cacheTurn(sessionId: string, questionId: string, decision: NextDecision): void {
+  turnCache.set(turnKey(sessionId, questionId), decision);
+}
+
+/**
  * Single fast classification call (Haiku -- this is a narrow, well-scoped
  * judgment call, not open-ended generation) that resolves the just-answered
  * question's terminate_if condition AND walks forward through any
@@ -79,6 +116,13 @@ export async function decideNext(
 
   const client = new Anthropic({ apiKey });
 
+  // Only questions that CAN be skipped need the model's judgment. When none
+  // of the remaining ones carry a skip condition, the next question is
+  // simply the next in order -- so the prompt drops the whole question list
+  // and asks one thing. That is the common case, and the list is the largest
+  // part of the prompt, so this is most of the latency saving.
+  const anyRemainingSkips = remaining.some((q) => q.skip_if);
+
   const questionList = remaining
     .map(
       (q) =>
@@ -90,7 +134,31 @@ export async function decideNext(
     .map((h) => `${h.id}: "${h.text}" -> caller answered: "${h.answer}"`)
     .join('\n');
 
-  const prompt = `Conversation so far (question -> caller's answer), in order:
+  const prompt = anyRemainingSkips
+    ? fullPrompt()
+    : terminateOnlyPrompt();
+
+  function terminateOnlyPrompt() {
+    return `Conversation so far (question -> caller's answer), in order:
+${historyText}
+
+The caller just answered ${justAnswered.id}.
+${justAnswered.id}'s terminate condition: ${justAnsweredQ?.terminate_if}
+
+Task: does that terminate condition apply, given the caller's answer?
+
+Rules:
+- Numeric ranges are INCLUSIVE of both endpoints unless the text says
+  otherwise. "35-45" includes someone who is 35 and someone who is 45.
+- Terminate only when the condition is CLEARLY met. If the answer is
+  ambiguous, partial, or you are unsure, do NOT terminate.
+
+Respond with ONLY this JSON, no commentary:
+{"terminate": true or false}`;
+  }
+
+  function fullPrompt() {
+    return `Conversation so far (question -> caller's answer), in order:
 ${historyText}
 
 The caller just answered ${justAnswered.id}.
@@ -114,8 +182,20 @@ Task:
 
 Respond with ONLY this JSON, no commentary:
 {"terminate": true or false, "next_question_id": "Q_ID or null"}`;
+  }
 
-  const message = await client.messages.create({
+  // Fail open on the deadline: keep the call alive and move to the next
+  // question in order. A caller who should have been screened out answering
+  // one more question is recoverable from the responses tab afterwards. Dead
+  // air on a real phone call is not.
+  const fallback: NextDecision = { terminate: false, nextQuestionId: remaining[0]?.id ?? null };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), CLASSIFY_DEADLINE_MS);
+  });
+
+  const classify = (async (): Promise<NextDecision> => {
+    const message = await client.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 200,
     messages: [
@@ -139,8 +219,35 @@ Respond with ONLY this JSON, no commentary:
     parsed = JSON.parse(match[0]);
   }
 
-  return {
-    terminate: Boolean(parsed.terminate),
-    nextQuestionId: parsed.terminate ? null : (parsed.next_question_id ?? null),
-  };
+    if (parsed.terminate) return { terminate: true, nextQuestionId: null };
+    // The terminate-only prompt returns no next_question_id -- there is
+    // nothing to skip, so the next question is the next one in order.
+    return {
+      terminate: false,
+      nextQuestionId: anyRemainingSkips
+        ? (parsed.next_question_id ?? null)
+        : (remaining[0]?.id ?? null),
+    };
+  })();
+
+  try {
+    const result = await Promise.race([classify, deadline]);
+    if (result === null) {
+      console.error(
+        '[screenerRuntime] classification exceeded',
+        CLASSIFY_DEADLINE_MS,
+        'ms for',
+        justAnswered.id,
+        '-- continuing without terminating'
+      );
+      return fallback;
+    }
+    return result;
+  } catch (err) {
+    // A failed classification must not end someone's screener either.
+    console.error('[screenerRuntime] classification failed for', justAnswered.id, err);
+    return fallback;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
