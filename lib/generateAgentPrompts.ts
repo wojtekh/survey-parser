@@ -161,9 +161,32 @@ export function buildAgentDefinition(input: {
           data: { name: 'End', prompt: input.prompts.end },
         },
       ],
+      // Every edge needs BOTH data.label and data.condition. Dograh rejects
+      // an empty edge data object with "Field required" on each -- the
+      // condition is what the model evaluates to decide when to move on, so
+      // an edge without one has no way to fire. Shapes copied from the
+      // known-good definitions in this folder.
       edges: [
-        { id: 'edge-start-ask', source: 'start-1', target: 'ask-1', data: {} },
-        { id: 'edge-ask-end', source: 'ask-1', target: 'end-1', data: {} },
+        {
+          id: 'edge-start-ask',
+          source: 'start-1',
+          target: 'ask-1',
+          data: {
+            label: 'Begin screener',
+            condition:
+              'The opening has been delivered and the caller has agreed to continue.',
+          },
+        },
+        {
+          id: 'edge-ask-end',
+          source: 'ask-1',
+          target: 'end-1',
+          data: {
+            label: 'Screener complete or caller disqualified',
+            condition:
+              'The get_next_screener_question tool has returned done=true -- either the caller was disqualified (terminated=true) or the screener finished and the invitation was read -- or the caller wants to end the call early.',
+          },
+        },
       ],
     },
   };
