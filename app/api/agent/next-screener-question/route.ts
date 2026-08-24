@@ -6,6 +6,14 @@ import { encodeQuestionId, resolveSession } from '@/lib/callSession';
 
 export const runtime = 'nodejs';
 
+/**
+ * Said to a caller who did not qualify, when the source document gave no
+ * wording of its own. Plain and final: it states the outcome and closes,
+ * rather than leaving the agent to improvise an explanation.
+ */
+const DEFAULT_TERMINATE_MESSAGE =
+  "I'm sorry, it looks like you don't qualify for this particular study. Thank you very much for your time.";
+
 // POST /api/agent/next-screener-question
 // { conversation_id, spreadsheet_id, last_question_id?, answer? }  -- outbound
 // { conversation_id, phone_number, last_question_id?, answer? }     -- inbound
@@ -116,7 +124,11 @@ export async function POST(request: Request) {
         terminated: true,
         question_id: null,
         question: null,
-        closing_message: screener.closing.decline_response,
+        // decline_response used to be returned here. That is the reply to a
+        // caller who QUALIFIED and turned the invitation down -- reading it
+        // to someone who was screened out thanks them for considering an
+        // offer they were never made.
+        closing_message: screener.closing.terminate_response || DEFAULT_TERMINATE_MESSAGE,
       });
     }
 

@@ -101,6 +101,15 @@ ${questionList || '(none -- this was the last question)'}
 
 Task:
 1. Does ${justAnswered.id}'s terminate condition apply, given the caller's answer and the conversation so far? If ${justAnswered.id} has no terminate condition, this is false.
+
+   Rules for this judgment:
+   - Numeric ranges are INCLUSIVE of both endpoints unless the text says
+     otherwise. "35-45" includes someone who is 35 and someone who is 45.
+   - Terminate only when the condition is CLEARLY met. If the answer is
+     ambiguous, partial, or you are unsure, do NOT terminate.
+     Ending a qualified caller's screener is unrecoverable -- they are gone.
+     Asking one more question of someone who should have been screened out
+     costs nothing and is caught later.
 2. If not terminating: walking forward through the remaining questions in order, skip any whose skip condition is satisfied by the conversation so far, and stop at the first one that is NOT skipped -- that is the next question to ask. If every remaining question would be skipped, or there are no remaining questions, there is no next question.
 
 Respond with ONLY this JSON, no commentary:

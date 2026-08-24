@@ -56,6 +56,18 @@ export interface ScreenerClosing {
   accept_response: string;
   /** What to say if the caller declines the invitation. */
   decline_response: string;
+  /**
+   * What to say to someone who did NOT qualify.
+   *
+   * Distinct from decline_response, which is for a caller who qualified and
+   * turned the invitation down. Conflating the two is how a disqualified
+   * caller ends up hearing "thank you for your time and consideration" --
+   * a reply to an offer they were never made.
+   *
+   * Optional: screeners written before this field existed fall back to a
+   * default in the next-screener-question route, so nothing needs re-parsing.
+   */
+  terminate_response?: string;
 }
 
 export interface ParsedScreener {
@@ -100,6 +112,27 @@ Rules:
      combinations that disqualify, "must have visited at least one of these
      in the past 12 months or terminate"). null if this question never ends
      the call on its own.
+
+     CRITICAL -- when the question has per-option TERMINATE / CONTINUE
+     markers (a numbered answer list where individual options are tagged),
+     do NOT paraphrase them into a range or a summary. ENUMERATE the
+     terminating options verbatim, exactly as the document words them.
+
+     Wrong: "the caller is under 25 or over 45"
+     Right: "The caller's answer falls in any of: Less than 18 years old;
+             18-24 years old; 46-54 years old; 55-60 years old; 60-75 years
+             old; 75 years +"
+
+     A paraphrase silently changes who gets disqualified at the boundaries.
+     In the example above, 45 belongs to a CONTINUE option, but "over 45"
+     reads as terminating for a caller who is exactly 45. Enumerating the
+     options as written removes that whole class of error.
+
+     If an option in such a list carries NO marker at all, treat the
+     question as uncertain: leave it out of terminate_if, set
+     needs_review=true, and say in review_note which option was unmarked.
+     Never assume an unmarked option terminates, and never assume it
+     continues.
    - internal_note: any silent eligibility/quota/tracking logic tied to this
      question that must never be spoken aloud to the caller (e.g. how an
      answer feeds a demographic quota bucket). null if there's nothing like
@@ -111,7 +144,11 @@ Rules:
    as a single-item array with condition "Default".
 4. Extract the closing/invitation script (the final "would you like to
    participate" ask plus incentive details) into "closing", with the
-   accept and decline responses.
+   accept and decline responses. Also set "terminate_response": what to say
+   to a caller who does NOT qualify. This is NOT the same as
+   decline_response (which answers someone who qualified and said no). If
+   the document gives no disqualification wording, omit the field rather
+   than reusing the decline text.
 5. If you are genuinely unsure about a question's exact boundary, its skip
    or terminate condition, or how to phrase it naturally, make your best
    reasonable guess AND set needs_review=true with a review_note explaining
@@ -150,7 +187,7 @@ Respond with ONLY a single JSON object, no markdown fences, no commentary:
       "review_note": "string or null"
     }, ...
   ],
-  "closing": { "invitation_script": "string", "accept_response": "string", "decline_response": "string" },
+  "closing": { "invitation_script": "string", "accept_response": "string", "decline_response": "string", "terminate_response": "string or omitted" },
   "flags": ["short human-readable note", ...]
 }`;
 
