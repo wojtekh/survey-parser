@@ -3,6 +3,44 @@
 import { useEffect, useState, FormEvent } from 'react';
 import type { ParsedScreener, ScreenerQuestion, ScreenerOpening } from '@/lib/generateScreener';
 import { renderScreenerScript } from '@/lib/renderScreenerScript';
+import { MAX_UPLOAD_BYTES, formatBytes } from '@/lib/limits';
+
+/**
+ * Read a JSON API response, or throw a message a human can act on.
+ *
+ * Every handler below used to call res.json() BEFORE checking res.ok. That
+ * works while the server answers in JSON. It breaks the moment something
+ * upstream answers with an HTML error page instead -- a proxy timeout, a
+ * crashed container, a 413 from a reverse proxy. res.json() then throws
+ * first, and the user reads "Unexpected token '<'" instead of what went
+ * wrong. So: read the body as text, check the status, and only then try to
+ * parse it.
+ */
+async function readJson(res: Response, fallback: string): Promise<any> {
+  const text = await res.text();
+  let body: any = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    // Not JSON. An HTML error page, or an empty body. Handled below.
+  }
+
+  if (!res.ok) {
+    if (typeof body?.error === 'string') throw new Error(body.error);
+    if (res.status === 408 || res.status === 504) {
+      throw new Error('The server took too long and timed out. Try a smaller document.');
+    }
+    if (res.status === 413) {
+      throw new Error('That upload is too large for the server to accept.');
+    }
+    throw new Error(`${fallback} (HTTP ${res.status})`);
+  }
+
+  if (body === null) {
+    throw new Error(`${fallback} The server sent a response this page could not read.`);
+  }
+  return body;
+}
 
 type SurveyType = 'simple' | 'screener';
 
@@ -76,8 +114,7 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone_number: phoneNumber.trim(), spreadsheet_id: spreadsheetId }),
       });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? 'Failed to save mapping.');
+      await readJson(res, 'Failed to save mapping.');
       loadInboundMappings();
       setNewNumber('');
       setNewNumberSurveyId('');
@@ -98,8 +135,7 @@ export default function Home() {
       const res = await fetch(`/api/inbound-numbers/${encodeURIComponent(phoneNumber)}`, {
         method: 'DELETE',
       });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? 'Failed to remove mapping.');
+      await readJson(res, 'Failed to remove mapping.');
       setInboundMappings((prev) => (prev ? prev.filter((m) => m.phoneNumber !== phoneNumber) : prev));
     } catch (err) {
       setInboundError(err instanceof Error ? err.message : 'Failed to remove mapping.');
@@ -123,8 +159,7 @@ export default function Home() {
       const res = await fetch(`/api/surveys/${encodeURIComponent(spreadsheetId)}`, {
         method: 'DELETE',
       });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? 'Failed to delete survey.');
+      await readJson(res, 'Failed to delete survey.');
       setSurveys((prev) => (prev ? prev.filter((s) => s.spreadsheetId !== spreadsheetId) : prev));
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : 'Failed to delete survey.');
@@ -157,6 +192,19 @@ export default function Home() {
     e.preventDefault();
     if (!file) return;
 
+    // Fail fast, so an oversized file doesn't cost a long upload first.
+    // The server enforces the same limit again on arrival -- that check is
+    // the real one, this is only a courtesy.
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setError(
+        `"${file.name}" is ${formatBytes(file.size)}. The limit is ${formatBytes(
+          MAX_UPLOAD_BYTES
+        )}. Choose a smaller document, or split it.`
+      );
+      setStatus('error');
+      return;
+    }
+
     setStatus('parsing');
     setError(null);
     resetResults();
@@ -168,8 +216,7 @@ export default function Home() {
 
     try {
       const res = await fetch('/api/parse', { method: 'POST', body: formData });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? 'Something went wrong.');
+      const body = await readJson(res, 'Could not parse that document.');
       if (body.surveyType === 'screener') {
         setScreener(body.result as ParsedScreener);
       } else {
@@ -200,8 +247,7 @@ export default function Home() {
           ...(screenerToPersist ? { screener: screenerToPersist } : {}),
         }),
       });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? 'Failed to push to Google Sheet.');
+      const body = await readJson(res, 'Failed to push to Google Sheet.');
       setPushState('pushed');
       setPushedUrl(body.url);
       setPushedId(body.spreadsheetId);
@@ -312,8 +358,8 @@ export default function Home() {
             required
           />
           <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6 }}>
-            .docx, .pdf, .txt, or .md. Tables in .docx are read as rating questions where
-            appropriate.
+            .docx, .pdf, .txt, or .md, up to {formatBytes(MAX_UPLOAD_BYTES)}. Tables in .docx
+            are read as rating questions where appropriate.
           </p>
         </div>
 

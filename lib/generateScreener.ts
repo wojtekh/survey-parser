@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { MAX_OUTPUT_TOKENS } from '@/lib/limits';
 
 // Structured extraction for recruitment/qualifier screeners -- documents with
 // real skip/termination logic (moderator's guides, recruiting scripts),
@@ -173,7 +174,7 @@ ${documentContent}`;
 
   const message = await client.messages.create({
     model: 'claude-sonnet-4-5',
-    max_tokens: 8000,
+    max_tokens: MAX_OUTPUT_TOKENS,
     system: SYSTEM_PROMPT,
     messages: [
       { role: 'user', content: userPrompt },
@@ -182,6 +183,17 @@ ${documentContent}`;
       { role: 'assistant', content: '{' },
     ],
   });
+
+  // A truncated answer is not a parse problem, and reporting it as one sends
+  // the user hunting for the wrong thing. stop_reason 'max_tokens' means the
+  // model ran out of room mid-JSON. JSON.parse then fails, AND the fallback
+  // regex below can't rescue it either -- there is no closing brace left to
+  // match. Catch it here and say what actually happened.
+  if (message.stop_reason === 'max_tokens') {
+    throw new Error(
+      `That document produced more output than one response can hold (the ${MAX_OUTPUT_TOKENS}-token limit). Split the survey into smaller documents and parse them one at a time.`
+    );
+  }
 
   const textBlock = message.content.find((block) => block.type === 'text');
   if (!textBlock || textBlock.type !== 'text') {
