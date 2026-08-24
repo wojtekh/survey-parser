@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, FormEvent } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import type { ParsedScreener, ScreenerQuestion, ScreenerOpening } from '@/lib/generateScreener';
 import { renderScreenerScript } from '@/lib/renderScreenerScript';
 import { MAX_UPLOAD_BYTES, formatBytes } from '@/lib/limits';
@@ -40,6 +40,85 @@ async function readJson(res: Response, fallback: string): Promise<any> {
     throw new Error(`${fallback} The server sent a response this page could not read.`);
   }
   return body;
+}
+
+/**
+ * The "Survey created" box, shared by the simple and screener results.
+ *
+ * The spreadsheet id is the one thing you have to carry out of this screen by
+ * hand -- it goes into a Dograh preset parameter. It used to sit mid-sentence
+ * inside a paragraph of explanation, which made it fiddly to select and easy
+ * to lose. Now it leads, in its own field, with a copy button. The prose sits
+ * underneath and says only what the id is for.
+ */
+function SurveyCreatedPanel({
+  url,
+  spreadsheetId,
+  note,
+}: {
+  url: string;
+  spreadsheetId: string | null;
+  note: ReactNode;
+}) {
+  const [idCopied, setIdCopied] = useState(false);
+
+  function copyId() {
+    if (!spreadsheetId) return;
+    navigator.clipboard.writeText(spreadsheetId);
+    setIdCopied(true);
+    setTimeout(() => setIdCopied(false), 1500);
+  }
+
+  return (
+    <div className="flags-panel" style={{ borderColor: '#a8d8b0', background: '#f0faf1' }}>
+      <h3 style={{ color: '#1f8a3f' }}>Survey created</h3>
+
+      {spreadsheetId && (
+        <>
+          <div
+            style={{
+              fontSize: 11,
+              textTransform: 'uppercase',
+              letterSpacing: '0.04em',
+              color: 'var(--text-secondary)',
+              marginBottom: 4,
+            }}
+          >
+            spreadsheet_id
+          </div>
+          <div className="row" style={{ gap: 8, alignItems: 'center', marginBottom: 10 }}>
+            <code
+              style={{
+                flex: 1,
+                fontSize: 14,
+                padding: '8px 10px',
+                background: '#fff',
+                border: '1px solid #a8d8b0',
+                borderRadius: 6,
+                wordBreak: 'break-all',
+                // Select the whole id on a single click -- it's one opaque
+                // token, so a partial selection is never what anyone wants.
+                userSelect: 'all',
+              }}
+            >
+              {spreadsheetId}
+            </code>
+            <button className="btn" onClick={copyId} style={{ whiteSpace: 'nowrap' }}>
+              {idCopied ? 'Copied!' : 'Copy ID'}
+            </button>
+          </div>
+        </>
+      )}
+
+      <p style={{ margin: '0 0 8px', fontSize: 13 }}>
+        <a href={url} target="_blank" rel="noreferrer">
+          Open the sheet
+        </a>
+      </p>
+
+      <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)' }}>{note}</p>
+    </div>
+  );
 }
 
 type SurveyType = 'simple' | 'screener';
@@ -421,18 +500,16 @@ export default function Home() {
           {pushError && <p className="error-text">{pushError}</p>}
 
           {pushedUrl && (
-            <div className="flags-panel" style={{ borderColor: '#a8d8b0', background: '#f0faf1' }}>
-              <h3 style={{ color: '#1f8a3f' }}>Survey created</h3>
-              <p style={{ margin: '0 0 8px', fontSize: 13 }}>
-                <a href={pushedUrl} target="_blank" rel="noreferrer">
-                  {pushedUrl}
-                </a>
-              </p>
-              <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)' }}>
-                Pass <code>spreadsheet_id={pushedId}</code> as this survey&apos;s{' '}
-                <code>initial_context</code> value when triggering a Dograh call for it.
-              </p>
-            </div>
+            <SurveyCreatedPanel
+              url={pushedUrl}
+              spreadsheetId={pushedId}
+              note={
+                <>
+                  Pass this as the survey&apos;s <code>initial_context</code> value when
+                  triggering a Dograh call for it.
+                </>
+              }
+            />
           )}
 
           {result.flags.length > 0 && (
@@ -630,23 +707,18 @@ export default function Home() {
           {pushError && <p className="error-text">{pushError}</p>}
 
           {pushedUrl && (
-            <div className="flags-panel" style={{ borderColor: '#a8d8b0', background: '#f0faf1' }}>
-              <h3 style={{ color: '#1f8a3f' }}>Survey created</h3>
-              <p style={{ margin: '0 0 8px', fontSize: 13 }}>
-                <a href={pushedUrl} target="_blank" rel="noreferrer">
-                  {pushedUrl}
-                </a>
-              </p>
-              <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)' }}>
-                The structured question list was saved to this sheet&apos;s &quot;screener&quot;
-                tab. Use <code>spreadsheet_id={pushedId}</code> as the
-                get_next_screener_question tool&apos;s preset parameter (see
-                dograh/tools-setup.md) -- it now resolves skip/terminate logic server-side
-                instead of the agent judging it from a script. The exported script below is
-                still useful as the agent&apos;s Knowledge Base document, for phrasing and the
-                opening/closing scripts.
-              </p>
-            </div>
+            <SurveyCreatedPanel
+              url={pushedUrl}
+              spreadsheetId={pushedId}
+              note={
+                <>
+                  Use this as the <code>get_next_screener_question</code> preset parameter (see
+                  dograh/tools-setup.md). The skip and terminate logic lives in the sheet&apos;s{' '}
+                  <strong>screener</strong> tab and is resolved server-side. The script below is
+                  the agent&apos;s Knowledge Base document.
+                </>
+              }
+            />
           )}
 
           <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
