@@ -159,7 +159,10 @@ export async function POST(request: Request) {
     // the responses tab twice.
     const replay = getCachedTurn(session.sessionId, session.questionId);
     if (replay) {
-      return NextResponse.json(buildTurnResponse(screener, session.sessionId, replay));
+      const body = buildTurnResponse(screener, session.sessionId, replay);
+      // null only if the cached next question is no longer in the screener --
+      // fall through and decide again rather than answer with nothing.
+      if (body) return NextResponse.json(body);
     }
 
     const history = getHistory(session.sessionId);
