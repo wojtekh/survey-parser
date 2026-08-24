@@ -1,7 +1,14 @@
 import { NextResponse } from 'next/server';
 import { appendResponse, resolveSpreadsheetId } from '@/lib/googleSheets';
 import { checkAgentSecret } from '@/lib/checkAgentSecret';
-import { getCachedScreener, getHistory, recordHistory, decideNext } from '@/lib/screenerRuntime';
+import {
+  getCachedScreener,
+  getHistory,
+  recordHistory,
+  decideNext,
+  getCachedTurn,
+  cacheTurn,
+} from '@/lib/screenerRuntime';
 import { encodeQuestionId, resolveSession } from '@/lib/callSession';
 
 export const runtime = 'nodejs';
@@ -39,6 +46,53 @@ const DEFAULT_TERMINATE_MESSAGE =
 // agent already echoes back reliably. See lib/callSession.ts for why. A
 // conversation_id that is still configured gets used only as a fallback for
 // a call already in flight from an older agent build.
+/**
+ * Turn a decision into the response body.
+ *
+ * Shared by the first run and by a retry replay, so the two can never drift
+ * apart -- a retry that answered differently from the call it is replaying
+ * would be worse than the duplicate it replaced.
+ */
+function buildTurnResponse(
+  screener: Awaited<ReturnType<typeof getCachedScreener>>,
+  sessionId: string,
+  decision: { terminate: boolean; nextQuestionId: string | null }
+) {
+  if (decision.terminate) {
+    return {
+      done: true,
+      terminated: true,
+      question_id: null,
+      question: null,
+      closing_message: screener.closing.terminate_response || DEFAULT_TERMINATE_MESSAGE,
+    };
+  }
+
+  if (!decision.nextQuestionId) {
+    return {
+      done: true,
+      terminated: false,
+      question_id: null,
+      question: null,
+      closing: {
+        invitation_script: screener.closing.invitation_script,
+        accept_response: screener.closing.accept_response,
+        decline_response: screener.closing.decline_response,
+      },
+    };
+  }
+
+  const next = screener.questions.find((q) => q.id === decision.nextQuestionId);
+  if (!next) return null;
+
+  return {
+    done: false,
+    terminated: false,
+    question_id: encodeQuestionId(sessionId, next.id),
+    question: next.text,
+  };
+}
+
 export async function POST(request: Request) {
   if (!checkAgentSecret(request)) {
     return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 });
@@ -97,6 +151,17 @@ export async function POST(request: Request) {
     }
 
     const justAnswered = { id: session.questionId, text: answeredQuestion.text, answer };
+
+    // Dograh's function-call timeout is a hard 5 seconds, and it retries a
+    // timed-out call with identical arguments -- while the original request
+    // usually finished on our side a moment later. Replaying the stored
+    // decision keeps the retry fast AND stops the answer being appended to
+    // the responses tab twice.
+    const replay = getCachedTurn(session.sessionId, session.questionId);
+    if (replay) {
+      return NextResponse.json(buildTurnResponse(screener, session.sessionId, replay));
+    }
+
     const history = getHistory(session.sessionId);
 
     // Record durably (Sheets) and decide what's next (Haiku classification)
@@ -117,6 +182,7 @@ export async function POST(request: Request) {
     ]);
 
     recordHistory(session.sessionId, justAnswered);
+    cacheTurn(session.sessionId, session.questionId, decision);
 
     if (decision.terminate) {
       return NextResponse.json({
