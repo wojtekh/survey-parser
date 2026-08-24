@@ -479,6 +479,61 @@ export async function getScreenerRaw(spreadsheetId: string): Promise<string> {
   return value;
 }
 
+const PROMPTS_TAB = 'prompts';
+
+/**
+ * The three Dograh node prompts for this survey's agent, as edited by hand.
+ *
+ * Stored per survey rather than regenerated on demand, because the whole
+ * point is that they get adjusted after hearing a real call. A regenerated
+ * prompt would silently throw those edits away.
+ *
+ * Same one-JSON-blob-in-A1 shape as the `screener` and `fields` tabs.
+ */
+export interface AgentPromptRecord {
+  start: string;
+  agent: string;
+  end: string;
+  /** get_next_screener_question's UUID from the Dograh dashboard, if known. */
+  toolUuid?: string;
+  updatedAt: string;
+}
+
+export async function writePrompts(
+  spreadsheetId: string,
+  prompts: AgentPromptRecord
+): Promise<void> {
+  const json = JSON.stringify(prompts);
+  if (json.length > 45000) {
+    throw new Error(
+      `Prompts JSON is ${json.length} characters, too close to a Google Sheets cell's ~50k limit. Shorten the prompts.`
+    );
+  }
+
+  const meta = await authedFetch(`${SHEETS_BASE}/${spreadsheetId}?fields=sheets.properties.title`);
+  const titles: string[] = (meta.sheets ?? []).map((s: any) => s.properties?.title);
+
+  if (!titles.includes(PROMPTS_TAB)) {
+    await authedFetch(`${SHEETS_BASE}/${spreadsheetId}:batchUpdate`, {
+      method: 'POST',
+      body: JSON.stringify({ requests: [{ addSheet: { properties: { title: PROMPTS_TAB } } }] }),
+    });
+  }
+
+  await authedFetch(`${SHEETS_BASE}/${spreadsheetId}/values/${PROMPTS_TAB}!A1?valueInputOption=RAW`, {
+    method: 'PUT',
+    body: JSON.stringify({ values: [[json]] }),
+  });
+}
+
+/** Read back saved prompts, or null if none were ever saved for this survey. */
+export async function getPrompts(spreadsheetId: string): Promise<AgentPromptRecord | null> {
+  const data = await readRangeOrEmpty(`${SHEETS_BASE}/${spreadsheetId}/values/${PROMPTS_TAB}!A1`);
+  const value: string | undefined = data?.values?.[0]?.[0];
+  if (!value) return null;
+  return JSON.parse(value) as AgentPromptRecord;
+}
+
 export interface SurveyIndexEntry {
   spreadsheetId: string;
   name: string;

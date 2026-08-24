@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { appendResponse, resolveSpreadsheetId } from '@/lib/googleSheets';
 import { checkAgentSecret } from '@/lib/checkAgentSecret';
 import { getCachedScreener, getHistory, recordHistory, decideNext } from '@/lib/screenerRuntime';
+import { encodeQuestionId, resolveSession } from '@/lib/callSession';
 
 export const runtime = 'nodejs';
 
@@ -23,6 +24,13 @@ export const runtime = 'nodejs';
 // question TEXT itself is looked up server-side from the stored screener,
 // not trusted from the LLM -- closes the same drift risk record_answer has
 // (where the LLM reports whatever it thinks it asked).
+//
+// conversation_id is now OPTIONAL and no longer keys anything. Dograh has no
+// working way to supply a unique per-call value, so this endpoint mints its
+// own session on the first turn and carries it inside question_id, which the
+// agent already echoes back reliably. See lib/callSession.ts for why. A
+// conversation_id that is still configured gets used only as a fallback for
+// a call already in flight from an older agent build.
 export async function POST(request: Request) {
   if (!checkAgentSecret(request)) {
     return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 });
@@ -35,9 +43,6 @@ export async function POST(request: Request) {
   const lastQuestionId: string | undefined = body.last_question_id;
   const answer: string | undefined = body.answer;
 
-  if (!conversationId || typeof conversationId !== 'string') {
-    return NextResponse.json({ error: 'Missing conversation_id.' }, { status: 400 });
-  }
   if (!rawSpreadsheetId && !phoneNumber) {
     return NextResponse.json({ error: 'Missing spreadsheet_id or phone_number.' }, { status: 400 });
   }
@@ -49,8 +54,13 @@ export async function POST(request: Request) {
     });
     const screener = await getCachedScreener(spreadsheetId);
 
+    // One session per call, minted on the first turn and echoed back inside
+    // question_id from then on. This -- not conversation_id -- is what keeps
+    // two simultaneous callers apart.
+    const session = resolveSession({ lastQuestionId, conversationId });
+
     // First call: no prior question to record, just hand back Q1.
-    if (!lastQuestionId) {
+    if (!session.questionId) {
       const first = screener.questions[0];
       if (!first) {
         return NextResponse.json({ error: 'This screener has no questions.' }, { status: 500 });
@@ -58,7 +68,7 @@ export async function POST(request: Request) {
       return NextResponse.json({
         done: false,
         terminated: false,
-        question_id: first.id,
+        question_id: encodeQuestionId(session.sessionId, first.id),
         question: first.text,
       });
     }
@@ -70,7 +80,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const answeredQuestion = screener.questions.find((q) => q.id === lastQuestionId);
+    const answeredQuestion = screener.questions.find((q) => q.id === session.questionId);
     if (!answeredQuestion) {
       return NextResponse.json(
         { error: `Unknown last_question_id "${lastQuestionId}" for this screener.` },
@@ -78,8 +88,8 @@ export async function POST(request: Request) {
       );
     }
 
-    const justAnswered = { id: lastQuestionId, text: answeredQuestion.text, answer };
-    const history = getHistory(conversationId);
+    const justAnswered = { id: session.questionId, text: answeredQuestion.text, answer };
+    const history = getHistory(session.sessionId);
 
     // Record durably (Sheets) and decide what's next (Haiku classification)
     // concurrently -- neither depends on the other's result, and doing them
@@ -88,7 +98,9 @@ export async function POST(request: Request) {
     // timeout: Dograh's function-call timeout is a hard 5s.
     const [, decision] = await Promise.all([
       appendResponse(spreadsheetId, {
-        conversationId,
+        // The session, not the supplied conversation_id -- column A of the
+        // responses tab is the only thing separating one caller from another.
+        conversationId: session.sessionId,
         questionIndex: Date.now(),
         question: answeredQuestion.text,
         answer,
@@ -96,7 +108,7 @@ export async function POST(request: Request) {
       decideNext(screener, history, justAnswered),
     ]);
 
-    recordHistory(conversationId, justAnswered);
+    recordHistory(session.sessionId, justAnswered);
 
     if (decision.terminate) {
       return NextResponse.json({
@@ -133,7 +145,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       done: false,
       terminated: false,
-      question_id: next.id,
+      question_id: encodeQuestionId(session.sessionId, next.id),
       question: next.text,
     });
   } catch (err) {

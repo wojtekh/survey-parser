@@ -300,13 +300,22 @@ Tool 1/2 pattern -- lower latency, one round-trip per turn.
 | Name | Value |
 |---|---|
 | `spreadsheet_id` | `{{initial_context.spreadsheet_id}}` |
-| `conversation_id` | `{{initial_context.conversation_id}}` |
 
 **Preset Parameters (inbound):**
 | Name | Value |
 |---|---|
 | `phone_number` | `{{initial_context.called_number}}` -- resolved via survey-parser's inbound number mapping. |
-| `conversation_id` | `{{initial_context.caller_number}}-{{current_time}}` -- see the call-collision note on Tool 3/4's conversation_id above; same fix applies here. |
+
+**Do NOT set a `conversation_id` preset parameter on this tool.** It is no
+longer required and no longer keys anything. The endpoint mints its own
+per-call session on the first turn and returns it inside `question_id`
+(`"a1b2c3d4.Q1"`); the agent echoing `last_question_id` back carries it
+forward. That is what keeps two simultaneous callers apart, and it is what
+lands in the responses tab's `conversation_id` column. See "Per-call
+identity" in tools-setup.md and `lib/callSession.ts`.
+
+Tell the agent to copy `last_question_id` back **character for character** --
+it is no longer just a question number.
 
 This screener must have been pushed via the app's screener flow (not
 manually created) either way -- that's what persists the structured

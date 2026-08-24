@@ -137,7 +137,8 @@ needed per turn instead of two.
 | Method | POST |
 | URL | `https://your-deployed-app.example.com/api/agent/next-screener-question` |
 | Custom header | `x-agent-secret` = your `AGENT_TOOLS_SECRET` |
-| LLM Parameters | `conversation_id` (string, required) — "Always pass exactly {{workflow_run_id}}." · `last_question_id` (string, optional) — "The question_id this tool returned last time. Omit on the very first call." · `answer` (string, optional) — "The caller's answer to that question, in their own words. Omit on the very first call." |
+| LLM Parameters | `last_question_id` (string, optional) — "The exact question_id this tool returned last time. Copy it back character for character. Omit on the very first call." · `answer` (string, optional) — "The caller's answer to that question, in their own words. Omit on the very first call." |
+| conversation_id | **No longer needed.** Leave it off. If an existing agent still sends one it is ignored except as a fallback for a call already in flight during a deploy. See "Per-call identity" below. |
 | Preset Parameters (outbound) | `spreadsheet_id` = `{{initial_context.spreadsheet_id}}` |
 | Preset Parameters (inbound) | `phone_number` = `{{initial_context.called_number}}` -- same lookup as `record_answer` above. |
 
@@ -153,28 +154,35 @@ asking questions the moment `done` is true -- using `closing_message` if
 `terminated`, or reading `closing.invitation_script` and reacting to their
 answer otherwise.
 
-`conversation_id` has been unreliable in practice: `{{workflow_run_id}}`
-resolves to an empty string whether it's an LLM Parameter (the model
-transcribes nothing) or a Preset Parameter (Dograh's preset-template engine
-itself errors out, "resolved to an empty value" -- this happens before the
-tool call even reaches survey-parser). The only configuration confirmed
-working end-to-end (AGO test call, run 47) was `conversation_id` as a
-**Preset Parameter with a fixed literal string**, same as `spreadsheet_id`
--- e.g. `test-call-1`.
+### Per-call identity (solved -- no Dograh config needed)
 
-That's fine for one-at-a-time testing but doesn't hold up for real,
-concurrent multi-caller use -- every call would share the same
-conversation_id and their answers would collide in the responses tab
-(worse here than with record_answer, since this tool also uses
-conversation_id to key the in-memory answer-history cache that feeds
-skip/terminate decisions). Note this is a genuinely separate problem from
-`spreadsheet_id`/`phone_number` above -- don't reuse `{{initial_context.
-called_number}}` for `conversation_id` too, since concurrent calls to the
-same inbound number need distinct conversation_ids but should resolve to
-the same spreadsheet_id. Still unresolved; worth testing whether Dograh
-exposes any other per-call unique identifier in `initial_context` on real
-inbound/outbound calls before relying on this tool for concurrent,
-production multi-caller use.
+`conversation_id` used to be required here, and it never worked. `{{workflow_run_id}}`
+resolves to an empty string both as an LLM Parameter (the model transcribes
+nothing) and as a Preset Parameter (Dograh's template engine errors out,
+"resolved to an empty value", before the call even reaches survey-parser).
+The only configuration confirmed working end to end was a Preset Parameter
+holding a fixed literal string -- which every concurrent call would then
+share, colliding their answers in the responses tab AND mixing the in-memory
+answer history that feeds skip/terminate decisions.
+
+**This is now handled server-side.** The endpoint mints its own 8-hex-character
+session on the first turn of each call and returns it inside `question_id`:
+
+```
+first call  ->  question_id: "a1b2c3d4.Q1"
+next call   ->  last_question_id: "a1b2c3d4.Q1"  ->  question_id: "a1b2c3d4.Q2"
+```
+
+The agent is already required to echo `last_question_id` back exactly -- that
+is core to the tool working at all, and it is confirmed working on real calls.
+So the session rides on a channel that already works, and two simultaneous
+callers stay separate because each is seeded independently on its own first
+turn. Nothing to configure in Dograh.
+
+The session id is what lands in the responses tab's `conversation_id` column,
+so filtering column A separates callers exactly as it always should have.
+
+See `lib/callSession.ts`.
 
 ---
 

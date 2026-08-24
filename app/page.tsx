@@ -121,6 +121,192 @@ function SurveyCreatedPanel({
   );
 }
 
+
+/**
+ * Edit the three Dograh node prompts for this survey's agent, then get the
+ * create/definition body to POST.
+ *
+ * Shown AFTER the push, and deliberately not auto-created: the prompt is the
+ * one genuinely per-survey part of an agent, and the part most likely to need
+ * tuning once a real call has been heard. Creating an agent blind means
+ * delete-and-recreate cycles in the Dograh dashboard.
+ *
+ * Prompts are saved to the survey's own sheet (a "prompts" tab), so an edit
+ * survives a reload and can be revised later without re-parsing the document.
+ */
+function AgentPromptsPanel({ spreadsheetId }: { spreadsheetId: string }) {
+  const [state, setState] = useState<'idle' | 'loading' | 'ready' | 'saving'>('idle');
+  const [error, setError] = useState<string | null>(null);
+  const [start, setStart] = useState('');
+  const [agent, setAgent] = useState('');
+  const [end, setEnd] = useState('');
+  const [name, setName] = useState('');
+  const [toolUuid, setToolUuid] = useState('');
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [definition, setDefinition] = useState<unknown>(null);
+  const [defCopied, setDefCopied] = useState(false);
+
+  async function load() {
+    setState('loading');
+    setError(null);
+    try {
+      const res = await fetch(`/api/surveys/${encodeURIComponent(spreadsheetId)}/prompts`);
+      const body = await readJson(res, 'Could not load the agent prompts.');
+      setStart(body.prompts.start ?? '');
+      setAgent(body.prompts.agent ?? '');
+      setEnd(body.prompts.end ?? '');
+      setToolUuid(body.prompts.toolUuid ?? '');
+      setName(body.suggestedName ?? '');
+      setSavedAt(body.saved ? body.prompts.updatedAt : null);
+      setState('ready');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load the agent prompts.');
+      setState('idle');
+    }
+  }
+
+  async function save() {
+    setState('saving');
+    setError(null);
+    try {
+      const res = await fetch(`/api/surveys/${encodeURIComponent(spreadsheetId)}/prompts`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start, agent, end, toolUuid, name }),
+      });
+      const body = await readJson(res, 'Could not save the agent prompts.');
+      setSavedAt(body.prompts.updatedAt);
+      setDefinition(body.definition);
+      setState('ready');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save the agent prompts.');
+      setState('ready');
+    }
+  }
+
+  function copyDefinition() {
+    if (!definition) return;
+    navigator.clipboard.writeText(JSON.stringify(definition, null, 2));
+    setDefCopied(true);
+    setTimeout(() => setDefCopied(false), 1500);
+  }
+
+  const field = (label: string, hint: string, value: string, onChange: (v: string) => void, rows: number) => (
+    <div style={{ marginBottom: 12 }}>
+      <label style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>{label}</label>
+      <p style={{ margin: '2px 0 4px', fontSize: 12, color: 'var(--text-secondary)' }}>{hint}</p>
+      <textarea
+        value={value}
+        rows={rows}
+        onChange={(e) => onChange(e.target.value)}
+        style={{ width: '100%', fontFamily: 'ui-monospace, monospace', fontSize: 12, lineHeight: 1.5 }}
+      />
+    </div>
+  );
+
+  return (
+    <div className="stack">
+      <h2 style={{ fontSize: 16, margin: 0 }}>Agent prompts</h2>
+
+      {state === 'idle' && (
+        <>
+          <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
+            Generate the three Dograh node prompts for this screener, adjust them, then take the
+            agent definition to Dograh. Nothing is created remotely from here.
+          </p>
+          {error && <p className="error-text">{error}</p>}
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
+            <button className="btn btn-primary" onClick={load}>
+              Generate agent prompts
+            </button>
+          </div>
+        </>
+      )}
+
+      {state === 'loading' && (
+        <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Generating…</p>
+      )}
+
+      {(state === 'ready' || state === 'saving') && (
+        <>
+          {error && <p className="error-text">{error}</p>}
+
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>Agent name</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} style={{ width: '100%' }} />
+          </div>
+
+          {field('Start node', 'The greeting, before any question.', start, setStart, 10)}
+          {field(
+            'Agent node',
+            'The loop. It tells the model to ask whatever get_next_screener_question returns and nothing else — the server owns the skip and terminate logic.',
+            agent,
+            setAgent,
+            20
+          )}
+          {field('End node', 'How to close, qualified or not.', end, setEnd, 10)}
+
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>
+              get_next_screener_question tool UUID
+            </label>
+            <p style={{ margin: '2px 0 4px', fontSize: 12, color: 'var(--text-secondary)' }}>
+              Copy it from the Dograh dashboard. Optional — leave it blank and attach the tool to
+              the agent node by hand after import.
+            </p>
+            <input
+              value={toolUuid}
+              onChange={(e) => setToolUuid(e.target.value)}
+              placeholder="271e3d17-d3ca-4330-864e-9b5977054eb0"
+              style={{ width: '100%', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
+            />
+          </div>
+
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              {savedAt ? `Saved ${new Date(savedAt).toLocaleString()}` : 'Not saved yet'}
+            </span>
+            <button className="btn btn-primary" onClick={save} disabled={state === 'saving'}>
+              {state === 'saving' ? 'Saving…' : 'Save prompts'}
+            </button>
+          </div>
+
+          {definition != null && (
+            <div className="flags-panel" style={{ borderColor: '#a8d8b0', background: '#f0faf1' }}>
+              <h3 style={{ color: '#1f8a3f' }}>Agent definition ready</h3>
+              <p style={{ margin: '0 0 8px', fontSize: 12, color: 'var(--text-secondary)' }}>
+                Save this as <code>agent.json</code>, then create the agent. Use the API, not the
+                dashboard&apos;s Upload Agent Definition — that one fails silently.
+              </p>
+              <pre
+                style={{
+                  fontSize: 11,
+                  background: '#fff',
+                  border: '1px solid #a8d8b0',
+                  borderRadius: 6,
+                  padding: 8,
+                  overflowX: 'auto',
+                  margin: '0 0 8px',
+                }}
+              >
+{`curl -X POST https://voice.cognexion.com/api/v1/workflow/create/definition \\
+  -H "X-API-Key: <your Dograh API key>" \\
+  -H "Content-Type: application/json" \\
+  --data @agent.json`}
+              </pre>
+              <div className="row" style={{ justifyContent: 'flex-end' }}>
+                <button className="btn" onClick={copyDefinition}>
+                  {defCopied ? 'Copied!' : 'Copy agent.json'}
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 type SurveyType = 'simple' | 'screener';
 
 interface ParsedResult {
@@ -720,6 +906,8 @@ export default function Home() {
               }
             />
           )}
+
+          {pushedId && <AgentPromptsPanel spreadsheetId={pushedId} />}
 
           <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
             <button className="btn" onClick={copyScript} disabled={unresolvedCount > 0}>
