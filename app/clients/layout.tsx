@@ -52,11 +52,10 @@ export default function ClientsLayout({ children }: { children: React.ReactNode 
   return (
     <div className="client-workspace">
       <div className="cw-rail">
-        <div className="cw-rail-title">
-          <span>Cognexion</span>
-        </div>
+        {/* No brand here -- the global rail already says Cognexion, and
+            repeating it made this card read as a second app rather than an
+            account picker inside the Clients view. */}
         <div className="cw-rail-search">
-          <span>⌕</span>
           <input
             type="text"
             placeholder="Find a client"

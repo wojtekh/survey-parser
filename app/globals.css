@@ -401,7 +401,20 @@ pre.json-view, pre {
 }
 .cw-rail-title { font: 600 15px var(--font-sans); color: var(--gray-900); padding: 0 12px 12px; }
 .cw-rail-label { font: 400 11px/16px var(--font-sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--gray-500); padding: 12px 12px 4px; }
-.cw-rail-search { padding: 0 4px 8px; display: flex; align-items: center; gap: 6px; color: var(--gray-500); }
+.cw-rail-search { padding: 4px 4px 8px; }
+.cw-rail-search input { width: 100%; }
+
+/* In the account picker the monogram is an avatar, not a code snippet.
+   Elsewhere .cw-mono-badge is still plain monospace for ids. */
+.cw-rail-item .cw-mono-badge {
+  flex: 0 0 26px;
+  width: 26px; height: 26px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-pill);
+  background: var(--lavender); color: var(--purple);
+  font: 600 11px var(--font-sans);
+  max-width: none;
+}
 .cw-rail-search input { font-size: 13px; padding: 8px 10px; }
 .cw-rail-list { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
 .cw-rail-item {
