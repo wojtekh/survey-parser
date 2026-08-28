@@ -67,10 +67,16 @@ export async function POST(request: Request) {
       })
       .filter((row): row is NonNullable<typeof row> => row !== null);
 
-    await appendResponsesBatch(spreadsheetId, rows);
-    clearConfirmedAnswers(spreadsheetId, conversationId);
-
-    return NextResponse.json({ ok: true, recorded: rows.length, total: fields.length });
+    // NOT converted to the wide responses format.
+    //
+    // This flow keys answers on gathered_context field names (first_name,
+    // q7...), which are a different namespace from the question ids the
+    // responses header is built from. Writing the old four-column shape into
+    // a wide sheet would corrupt it, and mapping the two namespaces is
+    // guesswork on a flow that has never been exercised end to end.
+    throw new Error(
+      'sync-call cannot write to this survey. Its responses tab has one column per question id, and this flow reports gathered_context field names instead. Wire the field keys to the survey\'s question ids before using it.'
+    );
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Failed to sync call results.' },

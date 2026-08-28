@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server';
 import {
+  recordWideAnswer,
+  clearRowCache,
+  type ResponseColumn,
+} from '@/lib/wideResponses';
+import {
   appendResponse,
   getAllQuestions,
   getAnsweredCount,
@@ -79,13 +84,27 @@ export async function POST(request: Request) {
     }
 
     const question = questions[answeredCount];
-    await appendResponse(spreadsheetId, {
-      conversationId,
-      questionIndex: answeredCount,
-      question,
-      answer,
-    });
     const nextIndex = answeredCount + 1;
+
+    // A flat survey has no question ids of its own, so push numbered its
+    // columns Q1..Qn in order. Position is the id here -- which is safe only
+    // because this path always walks the questions in order and never skips.
+    const columns: ResponseColumn[] = questions.map((text, i) => ({
+      id: `Q${i + 1}`,
+      text,
+    }));
+
+    // No classifier on this path, so the final status is known immediately.
+    const done = nextIndex >= questions.length;
+    await recordWideAnswer(spreadsheetId, columns, {
+      sessionId: conversationId,
+      questionId: `Q${nextIndex}`,
+      answer,
+      answeredCount: nextIndex,
+      status: done ? 'completed' : 'in progress',
+    });
+    if (done) clearRowCache(spreadsheetId, conversationId);
+
     setAnsweredCountCache(spreadsheetId, conversationId, nextIndex);
 
     const remaining = questions.length - nextIndex;

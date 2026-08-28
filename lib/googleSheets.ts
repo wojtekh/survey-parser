@@ -12,7 +12,7 @@ import { JWT } from 'google-auth-library';
 // Uses google-auth-library + plain fetch() against the Sheets and Drive
 // REST APIs rather than the `googleapis` package (see README for why).
 
-const SHEETS_BASE = 'https://sheets.googleapis.com/v4/spreadsheets';
+export const SHEETS_BASE = 'https://sheets.googleapis.com/v4/spreadsheets';
 const DRIVE_BASE = 'https://www.googleapis.com/drive/v3';
 const INDEX_TAB = 'surveys';
 
@@ -128,7 +128,7 @@ export class GoogleApiError extends Error {
   }
 }
 
-async function authedFetch(url: string, init?: RequestInit): Promise<any> {
+export async function authedFetch(url: string, init?: RequestInit): Promise<any> {
   const client = getAuthClient();
   const { token } = await client.getAccessToken();
   const res = await fetch(url, {
@@ -203,13 +203,11 @@ export async function createSurveySpreadsheet(
       method: 'POST',
       body: JSON.stringify({
         valueInputOption: 'RAW',
-        data: [
-          { range: 'questions!A1', values: [['questions']] },
-          {
-            range: 'responses!A1:D1',
-            values: [['conversation_id', 'question_index', 'question', 'user_response']],
-          },
-        ],
+        // No responses header here any more. It is now one column per
+        // question, so it cannot be written until the questions are known --
+        // sheets/push calls writeWideHeader once the screener or question
+        // list has been parsed. See lib/wideResponses.ts.
+        data: [{ range: 'questions!A1', values: [['questions']] }],
       }),
     }
   );

@@ -73,12 +73,20 @@ export async function POST(request: Request) {
       phoneNumber,
     });
 
-    await appendResponse(spreadsheetId, {
-      conversationId,
-      questionIndex: Date.now(),
-      question,
-      answer,
-    });
+    // NOT converted to the wide responses format, deliberately.
+    //
+    // This route never receives a question id -- the agent sends the question
+    // TEXT, whatever it believes it asked. Placing that in a column would mean
+    // fuzzy-matching text back to a question, which is the exact drift
+    // get_next_screener_question was built to remove. Better to stop than to
+    // guess a column and write an answer under the wrong heading.
+    return NextResponse.json(
+      {
+        error:
+          'record_answer cannot write to this survey. Its responses tab has one column per question, and this tool does not send a question id -- only the question text, which cannot be matched to a column reliably. Use get_next_screener_question instead; it returns the id to send back.',
+      },
+      { status: 410 }
+    );
 
     return NextResponse.json({ ok: true });
   } catch (err) {

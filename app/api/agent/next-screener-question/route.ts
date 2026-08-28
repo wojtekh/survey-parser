@@ -10,6 +10,12 @@ import {
   cacheTurn,
 } from '@/lib/screenerRuntime';
 import { encodeQuestionId, resolveSession } from '@/lib/callSession';
+import {
+  recordWideAnswer,
+  setCallStatus,
+  clearRowCache,
+  type ResponseColumn,
+} from '@/lib/wideResponses';
 
 export const runtime = 'nodejs';
 
@@ -172,20 +178,45 @@ export async function POST(request: Request) {
     // in parallel keeps this endpoint's latency close to whichever one is
     // slower rather than their sum. Same lesson as record_answer's earlier
     // timeout: Dograh's function-call timeout is a hard 5s.
+    const columns: ResponseColumn[] = screener.questions.map((q) => ({
+      id: q.id,
+      text: q.text,
+    }));
+
+    // Written as "in progress" on purpose. The real status is not known until
+    // decideNext returns, and waiting for it would turn max(sheets, model)
+    // into sheets + model against a hard 5s tool timeout. The status cell is
+    // flipped below, on the final turn only.
     const [, decision] = await Promise.all([
-      appendResponse(spreadsheetId, {
-        // The session, not the supplied conversation_id -- column A of the
-        // responses tab is the only thing separating one caller from another.
-        conversationId: session.sessionId,
-        questionIndex: Date.now(),
-        question: answeredQuestion.text,
+      recordWideAnswer(spreadsheetId, columns, {
+        // The session, not the supplied conversation_id -- column A is the
+        // only thing separating one caller from another.
+        sessionId: session.sessionId,
+        questionId: session.questionId,
         answer,
+        answeredCount: history.length + 1,
+        status: 'in progress',
       }),
       decideNext(screener, history, justAnswered),
     ]);
 
     recordHistory(session.sessionId, justAnswered);
     cacheTurn(session.sessionId, session.questionId, decision);
+
+    // The call is over one way or the other -- record which, then stop
+    // tracking the row. A row still reading "in progress" after this point is
+    // a caller who hung up, which is the only way a hangup can be seen.
+    const finalStatus = decision.terminate
+      ? 'terminated'
+      : decision.nextQuestionId
+        ? null
+        : 'completed';
+    if (finalStatus) {
+      await setCallStatus(spreadsheetId, session.sessionId, finalStatus).catch((err) =>
+        console.error('[next-screener-question] could not set final status', err)
+      );
+      clearRowCache(spreadsheetId, session.sessionId);
+    }
 
     if (decision.terminate) {
       return NextResponse.json({

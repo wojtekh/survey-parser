@@ -7,6 +7,8 @@ import {
   removeSurveyFromIndex,
   trashSpreadsheet,
 } from '@/lib/googleSheets';
+import { writeWideHeader, type ResponseColumn } from '@/lib/wideResponses';
+import type { ParsedScreener } from '@/lib/generateScreener';
 
 export const runtime = 'nodejs';
 
@@ -101,6 +103,19 @@ export async function POST(request: Request) {
     if (screener) {
       await writeScreener(spreadsheetId, screener);
     }
+
+    // The responses tab is one column per question, so its header can only be
+    // written now -- this is the first moment the questions are known.
+    //
+    // A screener supplies its own question ids; a flat survey has none, so it
+    // gets Q1..Qn. Either way the ids written here are what every writer must
+    // send back, and they are fixed for the life of the sheet. Adding a
+    // question later means a re-parse and a new sheet.
+    const columns: ResponseColumn[] = screener
+      ? (screener as ParsedScreener).questions.map((q) => ({ id: q.id, text: q.text }))
+      : (questions as string[]).map((text, i) => ({ id: `Q${i + 1}`, text }));
+
+    await writeWideHeader(spreadsheetId, columns);
 
     await addSurveyToIndex({
       spreadsheetId,
