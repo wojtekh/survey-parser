@@ -83,7 +83,7 @@ export default function ClientsLayout({ children }: { children: React.ReactNode 
         </div>
         <div className="cw-rail-spacer" />
         <div className="cw-rail-footer">
-          <Link href="/clients" className="cw-btn cw-btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
+          <Link href="/clients/new" className="cw-btn cw-btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
             + Add a client
           </Link>
         </div>

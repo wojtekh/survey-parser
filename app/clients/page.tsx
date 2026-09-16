@@ -1,120 +1,130 @@
 'use client';
 
-import { useState, FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
-import { notifyClientsChanged } from './layout';
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
 
-export default function ClientsIndexPage() {
-  const router = useRouter();
-  const [name, setName] = useState('');
-  const [contactEmail, setContactEmail] = useState('');
-  const [contactPhone, setContactPhone] = useState('');
-  const [kbEnabled, setKbEnabled] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+interface ServiceRow {
+  enabled: boolean;
+  status: 'none' | 'pending' | 'provisioned' | 'error';
+}
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!name.trim()) return;
+interface ClientListItem {
+  clientId: string;
+  name: string;
+  contactEmail: string;
+  contactPhone: string;
+  kbEnabled: boolean;
+  kbStatus: 'none' | 'pending' | 'provisioned' | 'error';
+  agents: { name: string }[];
+  services: Record<string, ServiceRow>;
+}
 
-    setSaving(true);
-    setError(null);
-    try {
-      const res = await fetch('/api/clients', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: name.trim(),
-          contact_email: contactEmail.trim(),
-          contact_phone: contactPhone.trim(),
-          kb_enabled: kbEnabled,
-        }),
-      });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? 'Failed to create client.');
-      notifyClientsChanged();
-      router.push(`/clients/${body.client.clientId}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create client.');
-      setSaving(false);
-    }
-  }
+function monogram(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
+type ChipState = 'none' | 'pending' | 'success' | 'alert';
+
+function chipClass(state: ChipState): string {
+  if (state === 'success') return 'cw-badge cw-badge-success';
+  if (state === 'alert') return 'cw-badge cw-badge-alert';
+  if (state === 'pending') return 'cw-badge cw-badge-info';
+  return 'cw-badge';
+}
+
+function kbChipState(client: ClientListItem): ChipState {
+  if (!client.kbEnabled) return 'none';
+  if (client.kbStatus === 'provisioned') return 'success';
+  if (client.kbStatus === 'error') return 'alert';
+  return 'pending';
+}
+
+function surveyChipState(client: ClientListItem): ChipState {
+  const survey = client.services?.survey;
+  if (!survey?.enabled) return 'none';
+  return survey.status === 'provisioned' ? 'success' : 'pending';
+}
+
+function agentChipState(client: ClientListItem): ChipState {
+  return client.agents.length > 0 ? 'success' : 'none';
+}
+
+export default function ClientsDashboardPage() {
+  const [clients, setClients] = useState<ClientListItem[] | null>(null);
+  const [query, setQuery] = useState('');
+
+  useEffect(() => {
+    fetch('/api/clients')
+      .then((res) => res.json())
+      .then((body) => setClients(body.clients ?? []))
+      .catch(() => setClients([]));
+  }, []);
+
+  const filtered = (clients ?? []).filter((c) =>
+    c.name.toLowerCase().includes(query.trim().toLowerCase())
+  );
 
   return (
     <>
       <div className="cw-header">
         <div style={{ flex: 1 }}>
-          <h1 className="cw-header-title">Add a client</h1>
+          <h1 className="cw-header-title">Clients</h1>
           <div className="cw-header-sub">
-            Pick a client from the left, or create a new one here.
+            {clients === null ? 'Loading…' : `${clients.length} account${clients.length === 1 ? '' : 's'}`}
           </div>
         </div>
+        <input
+          type="text"
+          placeholder="Search clients"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          style={{ width: 260 }}
+        />
+        <Link href="/clients/new" className="cw-btn cw-btn-primary">
+          + Add a client
+        </Link>
       </div>
 
-      <form className="cw-card stack" onSubmit={handleSubmit} style={{ maxWidth: 480 }}>
-        <div>
-          <label htmlFor="clientName">Client name</label>
-          <input
-            id="clientName"
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Acme Dental"
-            disabled={saving}
-            required
-          />
-        </div>
-
-        <div>
-          <label htmlFor="contactEmail">Contact email</label>
-          <input
-            id="contactEmail"
-            type="text"
-            value={contactEmail}
-            onChange={(e) => setContactEmail(e.target.value)}
-            placeholder="e.g. ops@acmedental.com"
-            disabled={saving}
-          />
-        </div>
-
-        <div>
-          <label htmlFor="contactPhone">Contact phone</label>
-          <input
-            id="contactPhone"
-            type="text"
-            value={contactPhone}
-            onChange={(e) => setContactPhone(e.target.value)}
-            placeholder="e.g. +1 555 010 0000"
-            disabled={saving}
-          />
-        </div>
-
-        <div className="row" style={{ justifyContent: 'flex-start', gap: 8 }}>
-          <input
-            id="kbEnabled"
-            type="checkbox"
-            checked={kbEnabled}
-            onChange={(e) => setKbEnabled(e.target.checked)}
-            disabled={saving}
-            style={{ width: 16, height: 16 }}
-          />
-          <label htmlFor="kbEnabled" style={{ margin: 0, fontWeight: 400, textTransform: 'none', letterSpacing: 0, color: 'var(--cw-text-body)' }}>
-            Create a knowledge base for this client
-          </label>
-        </div>
-        <p style={{ fontSize: 12, color: 'var(--cw-text-tertiary)', margin: '-8px 0 0' }}>
-          Leave this off for clients who only need surveys run through Dograh -- no Cognee memory
-          gets set up. You can turn it on for an existing client later too.
+      {clients === null ? (
+        <p style={{ fontSize: 13, color: 'var(--cw-text-tertiary)' }}>Loading…</p>
+      ) : filtered.length === 0 ? (
+        <p style={{ fontSize: 13, color: 'var(--cw-text-tertiary)' }}>
+          {clients.length === 0 ? 'No clients yet.' : 'No matches.'}
         </p>
-
-        {error && <p className="error-text">{error}</p>}
-
-        <div className="row" style={{ justifyContent: 'flex-end' }}>
-          <button type="submit" className="cw-btn cw-btn-primary" disabled={saving || !name.trim()}>
-            {saving ? 'Creating…' : 'Create client'}
-          </button>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 20 }}>
+          {filtered.map((c) => (
+            <Link
+              key={c.clientId}
+              href={`/clients/${c.clientId}`}
+              className="cw-card"
+              style={{ display: 'flex', flexDirection: 'column', gap: 16, textDecoration: 'none' }}
+            >
+              <div className="row" style={{ justifyContent: 'flex-start', gap: 12 }}>
+                <div className="cw-header-avatar">{monogram(c.name)}</div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ font: '600 15px var(--font-sans)', color: 'var(--cw-text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {c.name}
+                  </div>
+                  <div style={{ font: '400 12px var(--font-sans)', color: 'var(--cw-text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {c.contactEmail || 'no contact email'}
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                <span className={chipClass(kbChipState(c))}>Knowledge base</span>
+                <span className={chipClass(surveyChipState(c))}>Survey</span>
+                <span className={chipClass(agentChipState(c))}>Voice agent</span>
+                <span className="cw-badge" style={{ background: 'var(--cw-surface)', color: 'var(--cw-text-tertiary)', border: '1px dashed var(--border-input)' }}>
+                  AI services
+                </span>
+              </div>
+            </Link>
+          ))}
         </div>
-      </form>
+      )}
     </>
   );
 }

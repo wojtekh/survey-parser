@@ -3,6 +3,7 @@
 import { useEffect, useState, FormEvent } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { notifyClientsChanged } from '../layout';
+import AddSurveyModal, { SurveyEntry } from './AddSurveyModal';
 
 interface ClientAgent {
   name: string;
@@ -124,6 +125,18 @@ function AgentSection({
   );
 }
 
+interface SearchResult {
+  searchResult: unknown;
+  datasetId: string | null;
+  datasetName: string | null;
+}
+
+function renderSearchResult(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value == null) return '';
+  return JSON.stringify(value, null, 2);
+}
+
 function KnowledgeBaseSection({ clientId, anyAgentName }: { clientId: string; anyAgentName: string }) {
   const [documents, setDocuments] = useState<AgentDocument[] | null>(null);
   const [docsError, setDocsError] = useState<string | null>(null);
@@ -131,6 +144,32 @@ function KnowledgeBaseSection({ clientId, anyAgentName }: { clientId: string; an
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'error'>('idle');
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
+
+  async function runSearch() {
+    if (!searchQuery.trim()) return;
+    setSearching(true);
+    setSearchError(null);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent_name: anyAgentName, query: searchQuery.trim() }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? 'Search failed.');
+      setSearchResults(body.results ?? []);
+    } catch (err) {
+      setSearchError(err instanceof Error ? err.message : 'Search failed.');
+      setSearchResults(null);
+    } finally {
+      setSearching(false);
+    }
+  }
 
   function loadDocuments() {
     fetch(`/api/clients/${clientId}/documents?agent_name=${encodeURIComponent(anyAgentName)}`)
@@ -240,6 +279,148 @@ function KnowledgeBaseSection({ clientId, anyAgentName }: { clientId: string; an
             </div>
           ))}
         </div>
+      )}
+
+      <div style={{ borderTop: '1px solid var(--cw-border)', paddingTop: 16 }}>
+        <div className="cw-section-title" style={{ fontSize: 14 }}>
+          Search this knowledge base
+        </div>
+        <div className="row" style={{ gap: 8 }}>
+          <input
+            type="text"
+            placeholder="e.g. What's the fee schedule?"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && runSearch()}
+            disabled={searching}
+            style={{ flex: 1 }}
+          />
+          <button className="cw-btn cw-btn-primary" onClick={runSearch} disabled={searching || !searchQuery.trim()}>
+            {searching ? 'Searching…' : 'Search'}
+          </button>
+        </div>
+
+        {searchError && (
+          <p className="error-text" style={{ fontSize: 12, marginTop: 8 }}>
+            {searchError}
+          </p>
+        )}
+
+        {searchResults !== null && (
+          <div className="stack" style={{ marginTop: 12, gap: 8 }}>
+            {searchResults.length === 0 ? (
+              <p style={{ fontSize: 13, color: 'var(--cw-text-tertiary)' }}>No results.</p>
+            ) : (
+              searchResults.map((r, i) => (
+                <pre
+                  key={i}
+                  style={{
+                    fontSize: 13,
+                    whiteSpace: 'pre-wrap',
+                    background: 'var(--cw-surface)',
+                    border: '1px solid var(--cw-border)',
+                    borderRadius: 8,
+                    padding: '10px 12px',
+                    margin: 0,
+                  }}
+                >
+                  {renderSearchResult(r.searchResult)}
+                </pre>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SurveySection({ clientId, clientName }: { clientId: string; clientName: string }) {
+  const [linked, setLinked] = useState<SurveyEntry[] | null>(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [unlinkingId, setUnlinkingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  function load() {
+    fetch(`/api/clients/${clientId}/surveys`)
+      .then((res) => res.json())
+      .then((body) => setLinked(body.linked ?? []))
+      .catch(() => setLinked([]));
+  }
+
+  useEffect(load, [clientId]);
+
+  async function unlink(spreadsheetId: string) {
+    setUnlinkingId(spreadsheetId);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/surveys`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spreadsheet_id: spreadsheetId }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? 'Failed to unlink survey.');
+      setLinked((prev) => (prev ? prev.filter((s) => s.spreadsheetId !== spreadsheetId) : prev));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to unlink survey.');
+    } finally {
+      setUnlinkingId(null);
+    }
+  }
+
+  return (
+    <div className="cw-card stack">
+      <div className="cw-section-title">
+        Surveys <span className="count">{linked?.length ?? 0}</span>
+      </div>
+
+      {error && (
+        <p className="error-text" style={{ fontSize: 12 }}>
+          {error}
+        </p>
+      )}
+
+      {linked === null ? (
+        <p style={{ fontSize: 13, color: 'var(--cw-text-tertiary)' }}>Loading…</p>
+      ) : linked.length === 0 ? (
+        <p style={{ fontSize: 13, color: 'var(--cw-text-tertiary)' }}>No surveys linked yet.</p>
+      ) : (
+        <div>
+          {linked.map((s) => (
+            <div key={s.spreadsheetId} className="cw-doc-row">
+              <span className="cw-doc-name">{s.name}</span>
+              <div className="row" style={{ gap: 4, width: 'auto', justifyContent: 'flex-end' }}>
+                <a href={s.url} target="_blank" rel="noreferrer" className="cw-link-btn" style={{ fontSize: 13 }}>
+                  Open
+                </a>
+                <button
+                  className="cw-icon-btn danger"
+                  title="Unlink survey"
+                  onClick={() => unlink(s.spreadsheetId)}
+                  disabled={unlinkingId === s.spreadsheetId}
+                >
+                  {unlinkingId === s.spreadsheetId ? '…' : '✕'}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="row" style={{ justifyContent: 'flex-end' }}>
+        <button className="cw-btn cw-btn-primary" onClick={() => setShowAdd(true)}>
+          + Add survey
+        </button>
+      </div>
+
+      {showAdd && (
+        <AddSurveyModal
+          clientId={clientId}
+          clientName={clientName}
+          linkedSurveys={linked ?? []}
+          onClose={() => setShowAdd(false)}
+          onChanged={load}
+        />
       )}
     </div>
   );
@@ -466,6 +647,8 @@ export default function ClientDetailPage() {
           {provisionError && <p className="error-text">{provisionError}</p>}
         </div>
       )}
+
+      <SurveySection clientId={client.clientId} clientName={client.name} />
 
       {confirmingDeleteClient && (
         <ConfirmModal

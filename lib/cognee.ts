@@ -303,6 +303,41 @@ export interface AgentDocument {
   name: string;
 }
 
+export interface SearchResult {
+  searchResult: unknown;
+  datasetId: string | null;
+  datasetName: string | null;
+}
+
+/**
+ * Query an agent's knowledge base -- the retrieval half of remember/cognify.
+ * Verified against the live cognee-backend OpenAPI schema (2026-09-16):
+ * `POST /api/v1/search`, same `X-Api-Key` auth as remember/add, body
+ * `{query, searchType}`, response an array of
+ * `{search_result, dataset_id, dataset_name}`.
+ *
+ * 'GRAPH_COMPLETION' (default) returns an LLM answer grounded in the graph
+ * -- the fastest way to confirm ingested content is actually retrievable.
+ * 'CHUNKS' returns the raw retrieved text instead, with no synthesis step.
+ */
+export async function searchKnowledgeBase(
+  agentApiKey: string,
+  query: string,
+  searchType: 'GRAPH_COMPLETION' | 'CHUNKS' | 'SUMMARIES' = 'GRAPH_COMPLETION'
+): Promise<SearchResult[]> {
+  const data = await cogneeFetch('/api/v1/search', {
+    method: 'POST',
+    headers: { 'X-Api-Key': agentApiKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, searchType }),
+  });
+  const list = Array.isArray(data) ? data : [];
+  return list.map((item: any) => ({
+    searchResult: item.search_result ?? item,
+    datasetId: item.dataset_id ?? null,
+    datasetName: item.dataset_name ?? null,
+  }));
+}
+
 /** Look up the dataset ID Cognee assigned to `datasetName` for the caller (agent) making this request. */
 async function findDatasetId(agentApiKey: string, datasetName: string): Promise<string | null> {
   const datasets = await cogneeFetch('/api/v1/datasets', {
