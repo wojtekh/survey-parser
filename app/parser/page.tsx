@@ -1,0 +1,1355 @@
+'use client';
+
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import type { ParsedScreener, ScreenerQuestion, ScreenerOpening } from '@/lib/generateScreener';
+import { renderScreenerScript } from '@/lib/renderScreenerScript';
+import { MAX_UPLOAD_BYTES, formatBytes } from '@/lib/limits';
+
+/**
+ * Read a JSON API response, or throw a message a human can act on.
+ *
+ * Every handler below used to call res.json() BEFORE checking res.ok. That
+ * works while the server answers in JSON. It breaks the moment something
+ * upstream answers with an HTML error page instead -- a proxy timeout, a
+ * crashed container, a 413 from a reverse proxy. res.json() then throws
+ * first, and the user reads "Unexpected token '<'" instead of what went
+ * wrong. So: read the body as text, check the status, and only then try to
+ * parse it.
+ */
+async function readJson(res: Response, fallback: string): Promise<any> {
+  const text = await res.text();
+  let body: any = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    // Not JSON. An HTML error page, or an empty body. Handled below.
+  }
+
+  if (!res.ok) {
+    if (typeof body?.error === 'string') throw new Error(body.error);
+    if (res.status === 408 || res.status === 504) {
+      throw new Error('The server took too long and timed out. Try a smaller document.');
+    }
+    if (res.status === 413) {
+      throw new Error('That upload is too large for the server to accept.');
+    }
+    throw new Error(`${fallback} (HTTP ${res.status})`);
+  }
+
+  if (body === null) {
+    throw new Error(`${fallback} The server sent a response this page could not read.`);
+  }
+  return body;
+}
+
+/**
+ * The "Survey created" box, shared by the simple and screener results.
+ *
+ * The spreadsheet id is the one thing you have to carry out of this screen by
+ * hand -- it goes into a Dograh preset parameter. It used to sit mid-sentence
+ * inside a paragraph of explanation, which made it fiddly to select and easy
+ * to lose. Now it leads, in its own field, with a copy button. The prose sits
+ * underneath and says only what the id is for.
+ */
+function SurveyCreatedPanel({
+  url,
+  spreadsheetId,
+  note,
+}: {
+  url: string;
+  spreadsheetId: string | null;
+  note: ReactNode;
+}) {
+  const [idCopied, setIdCopied] = useState(false);
+
+  function copyId() {
+    if (!spreadsheetId) return;
+    navigator.clipboard.writeText(spreadsheetId);
+    setIdCopied(true);
+    setTimeout(() => setIdCopied(false), 1500);
+  }
+
+  return (
+    <div className="panel-success">
+      <h3>Survey created</h3>
+
+      {spreadsheetId && (
+        <>
+          <div
+            style={{
+              fontSize: 11,
+              textTransform: 'uppercase',
+              letterSpacing: '0.04em',
+              color: 'var(--text-secondary)',
+              marginBottom: 4,
+            }}
+          >
+            spreadsheet_id
+          </div>
+          <div className="row" style={{ gap: 8, alignItems: 'center', marginBottom: 10 }}>
+            <code
+              style={{
+                flex: 1,
+                fontSize: 14,
+                padding: '8px 10px',
+                background: '#fff',
+                border: '1px solid var(--success-border)',
+                borderRadius: 6,
+                wordBreak: 'break-all',
+                // Select the whole id on a single click -- it's one opaque
+                // token, so a partial selection is never what anyone wants.
+                userSelect: 'all',
+              }}
+            >
+              {spreadsheetId}
+            </code>
+            <button className="btn" onClick={copyId} style={{ whiteSpace: 'nowrap' }}>
+              {idCopied ? 'Copied!' : 'Copy ID'}
+            </button>
+          </div>
+        </>
+      )}
+
+      <p style={{ margin: '0 0 8px', fontSize: 13 }}>
+        <a href={url} target="_blank" rel="noreferrer">
+          Open the sheet
+        </a>
+      </p>
+
+      <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)' }}>{note}</p>
+    </div>
+  );
+}
+
+
+/**
+ * Edit the three Dograh node prompts for this survey's agent, then get the
+ * create/definition body to POST.
+ *
+ * Shown AFTER the push, and deliberately not auto-created: the prompt is the
+ * one genuinely per-survey part of an agent, and the part most likely to need
+ * tuning once a real call has been heard. Creating an agent blind means
+ * delete-and-recreate cycles in the Dograh dashboard.
+ *
+ * Prompts are saved to the survey's own sheet (a "prompts" tab), so an edit
+ * survives a reload and can be revised later without re-parsing the document.
+ */
+function AgentPromptsPanel({
+  spreadsheetId,
+  hasSaved,
+}: {
+  spreadsheetId: string;
+  hasSaved?: boolean;
+}) {
+  const [state, setState] = useState<'idle' | 'loading' | 'ready' | 'saving'>('idle');
+  const [error, setError] = useState<string | null>(null);
+  const [start, setStart] = useState('');
+  const [agent, setAgent] = useState('');
+  const [end, setEnd] = useState('');
+  const [name, setName] = useState('');
+  const [toolUuid, setToolUuid] = useState('');
+  const [toolName, setToolName] = useState('get_next_screener_question');
+  const [interviewerName, setInterviewerName] = useState('Alex');
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [definition, setDefinition] = useState<unknown>(null);
+  const [defCopied, setDefCopied] = useState(false);
+  const [workflowId, setWorkflowId] = useState<number | null>(null);
+  const [pushing, setPushing] = useState(false);
+  const [pushResult, setPushResult] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
+
+  async function load() {
+    setState('loading');
+    setError(null);
+    try {
+      const res = await fetch(`/api/surveys/${encodeURIComponent(spreadsheetId)}/prompts`);
+      const body = await readJson(res, 'Could not load the agent prompts.');
+      setStart(body.prompts.start ?? '');
+      setAgent(body.prompts.agent ?? '');
+      setEnd(body.prompts.end ?? '');
+      setToolUuid(body.prompts.toolUuid ?? '');
+      setToolName(body.prompts.toolName ?? 'get_next_screener_question');
+      setInterviewerName(body.prompts.interviewerName ?? 'Alex');
+      setName(body.suggestedName ?? body.prompts.name ?? '');
+      setSavedAt(body.saved ? body.prompts.updatedAt : null);
+      setWorkflowId(typeof body.prompts.dograhWorkflowId === 'number' ? body.prompts.dograhWorkflowId : null);
+      setDirty(false);
+      setState('ready');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load the agent prompts.');
+      setState('idle');
+    }
+  }
+
+  async function save() {
+    setState('saving');
+    setError(null);
+    try {
+      const res = await fetch(`/api/surveys/${encodeURIComponent(spreadsheetId)}/prompts`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start, agent, end, toolUuid, toolName, interviewerName, name }),
+      });
+      const body = await readJson(res, 'Could not save the agent prompts.');
+      setSavedAt(body.prompts.updatedAt);
+      setDefinition(body.definition);
+      setDirty(false);
+      setState('ready');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save the agent prompts.');
+      setState('ready');
+    }
+  }
+
+  async function pushToDograh() {
+    setPushing(true);
+    setError(null);
+    setPushResult(null);
+    try {
+      const res = await fetch(`/api/surveys/${encodeURIComponent(spreadsheetId)}/agent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const body = await readJson(res, 'Could not push the agent to Dograh.');
+      setWorkflowId(body.workflowId);
+      setPushResult(
+        body.action === 'created'
+          ? `Created agent ${body.workflowId} in Dograh.`
+          : `Updated agent ${body.workflowId} in Dograh.`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not push the agent to Dograh.');
+    } finally {
+      setPushing(false);
+    }
+  }
+
+  function copyDefinition() {
+    if (!definition) return;
+    navigator.clipboard.writeText(JSON.stringify(definition, null, 2));
+    setDefCopied(true);
+    setTimeout(() => setDefCopied(false), 1500);
+  }
+
+  const edit = (setter: (v: string) => void) => (v: string) => {
+    setter(v);
+    setDirty(true);
+  };
+
+  const field = (label: string, hint: string, value: string, onChange: (v: string) => void, rows: number) => (
+    <div style={{ marginBottom: 12 }}>
+      <label style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>{label}</label>
+      <p style={{ margin: '2px 0 4px', fontSize: 12, color: 'var(--text-secondary)' }}>{hint}</p>
+      <textarea
+        value={value}
+        rows={rows}
+        onChange={(e) => onChange(e.target.value)}
+        style={{ width: '100%', fontFamily: 'ui-monospace, monospace', fontSize: 12, lineHeight: 1.5 }}
+      />
+    </div>
+  );
+
+  return (
+    <div className="stack">
+      <h2>Agent prompts</h2>
+
+      {state === 'idle' && (
+        <>
+          <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
+            {hasSaved
+              ? 'Prompts were saved for this survey. Open them to review or revise.'
+              : 'Generate the three Dograh node prompts for this screener, adjust them, then take the agent definition to Dograh. Nothing is created remotely from here.'}
+          </p>
+          {error && <p className="error-text">{error}</p>}
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
+            <button className="btn btn-primary" onClick={load}>
+              {hasSaved ? 'Open agent prompts' : 'Generate agent prompts'}
+            </button>
+          </div>
+        </>
+      )}
+
+      {state === 'loading' && (
+        <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Generating…</p>
+      )}
+
+      {(state === 'ready' || state === 'saving') && (
+        <>
+          {error && <p className="error-text">{error}</p>}
+
+          <div className="row" style={{ gap: 12, marginBottom: 12 }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>Agent name</label>
+              <p style={{ margin: '2px 0 4px', fontSize: 12, color: 'var(--text-secondary)' }}>
+                How it is listed in Dograh. Never spoken.
+              </p>
+              <input value={name} onChange={(e) => setName(e.target.value)} style={{ width: '100%' }} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>
+                Interviewer name
+              </label>
+              <p style={{ margin: '2px 0 4px', fontSize: 12, color: 'var(--text-secondary)' }}>
+                Spoken aloud, and fills any <code>[NAME]</code> placeholder in the script.
+              </p>
+              <input
+                value={interviewerName}
+                onChange={(e) => {
+                  setInterviewerName(e.target.value);
+                  setDirty(true);
+                }}
+                style={{ width: '100%' }}
+              />
+            </div>
+          </div>
+
+          {/^[\s\S]*\[[^\]]*\bname\b[^\]]*\]/i.test(start) && (
+            <p className="error-text" style={{ fontSize: 12, marginTop: -4, marginBottom: 12 }}>
+              The start prompt still contains a <code>[NAME]</code>-style placeholder. Nothing tells
+              the agent it is a blank — it will read it aloud. Regenerate the prompts, or replace it
+              by hand.
+            </p>
+          )}
+
+          {field('Start node', 'The greeting, before any question.', start, edit(setStart), 10)}
+          {field(
+            'Agent node',
+            'The loop. It tells the model to ask whatever get_next_screener_question returns and nothing else — the server owns the skip and terminate logic.',
+            agent,
+            edit(setAgent),
+            20
+          )}
+          {field('End node', 'How to close, qualified or not.', end, edit(setEnd), 10)}
+
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>
+              Screener tool name
+            </label>
+            <p style={{ margin: '2px 0 4px', fontSize: 12, color: 'var(--text-secondary)' }}>
+              Must match the tool&apos;s name in Dograh exactly. Inbound and outbound need
+              separate tools, so this is often <code>…_inbound</code>.
+            </p>
+            <input
+              value={toolName}
+              onChange={(e) => {
+                setToolName(e.target.value);
+                setDirty(true);
+              }}
+              style={{ width: '100%', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
+            />
+            {toolName.trim() && !agent.includes(toolName.trim()) && (
+              <p className="error-text" style={{ fontSize: 12, marginTop: 4 }}>
+                The agent prompt never mentions <code>{toolName.trim()}</code>. The model will
+                call whatever name the prompt uses, and a name Dograh does not have fails
+                mid-call — after the caller has heard the opening. Fix the name here or the
+                prompt above so they match.
+              </p>
+            )}
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>
+              Screener tool UUID
+            </label>
+            <p style={{ margin: '2px 0 4px', fontSize: 12, color: 'var(--text-secondary)' }}>
+              Copy it from the Dograh dashboard. Optional — leave it blank and attach the tool to
+              the agent node by hand after import.
+            </p>
+            <input
+              value={toolUuid}
+              onChange={(e) => setToolUuid(e.target.value)}
+              placeholder="271e3d17-d3ca-4330-864e-9b5977054eb0"
+              style={{ width: '100%', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
+            />
+          </div>
+
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              {savedAt ? `Saved ${new Date(savedAt).toLocaleString()}` : 'Not saved yet'}
+            </span>
+            <button className="btn btn-primary" onClick={save} disabled={state === 'saving'}>
+              {state === 'saving' ? 'Saving…' : 'Save prompts'}
+            </button>
+          </div>
+
+          <div
+            className="row"
+            style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}
+          >
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              {workflowId
+                ? `Dograh agent ${workflowId} — pushing updates it in place.`
+                : 'Not in Dograh yet.'}
+            </span>
+            <button
+              className="btn"
+              onClick={pushToDograh}
+              disabled={pushing || !savedAt || dirty}
+              title={
+                !savedAt
+                  ? 'Save the prompts first.'
+                  : dirty
+                    ? 'You have unsaved edits — save them first.'
+                    : undefined
+              }
+            >
+              {pushing
+                ? 'Pushing…'
+                : workflowId
+                  ? 'Update in Dograh'
+                  : 'Create in Dograh'}
+            </button>
+          </div>
+
+          {pushResult && (
+            <p style={{ fontSize: 13, color: 'var(--success-text)', margin: 0 }}>{pushResult}</p>
+          )}
+
+          {definition != null && (
+            <div className="panel-success">
+              <h3>Agent definition</h3>
+              <p style={{ margin: '0 0 8px', fontSize: 12, color: 'var(--text-secondary)' }}>
+                Use <strong>Create in Dograh</strong> above unless it is unavailable. This is the
+                manual fallback: save it as <code>agent.json</code> and post it yourself. Never use
+                the dashboard&apos;s Upload Agent Definition — that one fails silently.
+              </p>
+              <pre
+                style={{
+                  fontSize: 11,
+                  background: '#fff',
+                  border: '1px solid var(--success-border)',
+                  borderRadius: 6,
+                  padding: 8,
+                  overflowX: 'auto',
+                  margin: '0 0 8px',
+                }}
+              >
+{`curl -X POST https://voice.cognexion.com/api/v1/workflow/create/definition \\
+  -H "X-API-Key: <your Dograh API key>" \\
+  -H "Content-Type: application/json" \\
+  --data @agent.json`}
+              </pre>
+              <div className="row" style={{ justifyContent: 'flex-end' }}>
+                <button className="btn" onClick={copyDefinition}>
+                  {defCopied ? 'Copied!' : 'Copy agent.json'}
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One row in "Past surveys", expandable in place.
+ *
+ * Before this, a survey pushed in an earlier session was a name and a link and
+ * nothing else: the parsed questions and the agent prompts only ever existed
+ * in the React state of the tab that pushed them. Getting back to them meant
+ * re-parsing the document -- another model call, and a SECOND spreadsheet,
+ * because sheets/push always creates a new one.
+ *
+ * Everything shown here was already in the sheet. It just had no reader.
+ */
+function SurveyRow({
+  survey,
+  deleting,
+  onDelete,
+}: {
+  survey: SurveyIndexEntry;
+  deleting: boolean;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [detail, setDetail] = useState<SurveyDetail | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function toggle() {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setOpen(true);
+    if (detail || loading) return; // already loaded once -- the sheet isn't re-read on every toggle
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/surveys/${encodeURIComponent(survey.spreadsheetId)}`);
+      setDetail(await readJson(res, 'Could not load this survey.'));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load this survey.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="question-item" style={{ display: 'block' }}>
+      <div className="row">
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>{survey.name}</div>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            {survey.spreadsheetId} ·{' '}
+            {survey.createdAt ? new Date(survey.createdAt).toLocaleString() : ''}
+          </div>
+        </div>
+        <div className="row" style={{ gap: 8, width: 'auto' }}>
+          <button className="btn" onClick={toggle}>
+            {open ? 'Hide' : 'Details'}
+          </button>
+          <a href={survey.url} target="_blank" rel="noreferrer" className="btn">
+            Open sheet
+          </a>
+          <button
+            className="btn"
+            style={{ color: 'var(--danger)' }}
+            disabled={deleting}
+            onClick={onDelete}
+          >
+            {deleting ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
+      </div>
+
+      {open && (
+        <div className="stack" style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+          {loading && <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Loading…</p>}
+          {error && <p className="error-text">{error}</p>}
+
+          {detail && (
+            <>
+              {detail.screener ? (
+                <div>
+                  <h3 style={{ fontSize: 14, margin: '0 0 8px' }}>
+                    Screener — {detail.screener.questions.length} questions
+                  </h3>
+                  <ol style={{ margin: 0, paddingLeft: 20, fontSize: 13 }}>
+                    {detail.screener.questions.map((q) => (
+                      <li key={q.id} style={{ marginBottom: 8 }}>
+                        <div>{q.text}</div>
+                        {q.skip_if && (
+                          <span className="rule-skip">
+                            <strong>Skip if:</strong> {q.skip_if}
+                          </span>
+                        )}
+                        {q.terminate_if && (
+                          <span className="rule-terminate">
+                            <strong>Terminate if:</strong> {q.terminate_if}
+                          </span>
+                        )}
+                        {q.needs_review && (
+                          <span className="review-note">
+                            <strong>Needs review:</strong> {q.review_note}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              ) : (
+                <div>
+                  <h3 style={{ fontSize: 14, margin: '0 0 8px' }}>
+                    Questions — {detail.questions.length}
+                  </h3>
+                  <ol style={{ margin: 0, paddingLeft: 20, fontSize: 13 }}>
+                    {detail.questions.map((q, i) => (
+                      <li key={i} style={{ marginBottom: 4 }}>
+                        {q}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+
+              {detail.screener ? (
+                <AgentPromptsPanel
+                  spreadsheetId={survey.spreadsheetId}
+                  hasSaved={detail.hasPrompts}
+                />
+              ) : (
+                <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0 }}>
+                  Agent prompts are generated from a screener&apos;s skip and terminate logic, so
+                  they only apply to surveys pushed through the screener flow.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type SurveyType = 'simple' | 'screener';
+
+interface ParsedResult {
+  title: string;
+  questions: string[];
+  flags: string[];
+}
+
+interface SurveyDetail {
+  spreadsheetId: string;
+  questions: string[];
+  screener: ParsedScreener | null;
+  hasPrompts: boolean;
+  promptsUpdatedAt: string | null;
+}
+
+interface SurveyIndexEntry {
+  spreadsheetId: string;
+  name: string;
+  url: string;
+  createdAt: string;
+}
+
+interface InboundMapping {
+  phoneNumber: string;
+  spreadsheetId: string;
+  updatedAt: string;
+}
+
+export default function Home() {
+  const [name, setName] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [surveyType, setSurveyType] = useState<SurveyType>('simple');
+  const [status, setStatus] = useState<'idle' | 'parsing' | 'error' | 'done'>('idle');
+  const [error, setError] = useState<string | null>(null);
+
+  // Simple-survey result state (unchanged behavior).
+  const [result, setResult] = useState<ParsedResult | null>(null);
+  const [view, setView] = useState<'list' | 'json'>('list');
+  const [copied, setCopied] = useState(false);
+
+  // Screener result state (editable).
+  const [screener, setScreener] = useState<ParsedScreener | null>(null);
+  const [scriptCopied, setScriptCopied] = useState(false);
+
+  const [pushState, setPushState] = useState<'idle' | 'pushing' | 'pushed' | 'error'>('idle');
+  const [pushError, setPushError] = useState<string | null>(null);
+  const [pushedUrl, setPushedUrl] = useState<string | null>(null);
+  const [pushedId, setPushedId] = useState<string | null>(null);
+  const [surveys, setSurveys] = useState<SurveyIndexEntry[] | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Set when the survey list itself fails to load. Kept separate from
+  // deleteError so a failed LOAD can never be mistaken for an empty list --
+  // that confusion is the whole bug this replaces.
+  const [surveysError, setSurveysError] = useState<string | null>(null);
+
+  // Inbound number -> survey mappings ("one number, reassigned per
+  // survey" -- and now, since Dograh's inbound tools resolve spreadsheet_id
+  // from phone_number server-side, reassigning is purely an edit here, no
+  // Dograh tool config ever needs touching).
+  const [inboundMappings, setInboundMappings] = useState<InboundMapping[] | null>(null);
+  const [newNumber, setNewNumber] = useState('');
+  const [newNumberSurveyId, setNewNumberSurveyId] = useState('');
+  const [savingNumber, setSavingNumber] = useState<string | null>(null); // phoneNumber being saved/removed
+  const [inboundError, setInboundError] = useState<string | null>(null);
+  /** Same idea as surveysError, for the inbound-number list. */
+  const [inboundLoadError, setInboundLoadError] = useState<string | null>(null);
+
+  // Both loaders used to end in `.catch(() => [])`, which rendered a failed
+  // load as an empty list -- indistinguishable from "you have none yet".
+  // A load that fails now says so.
+  async function loadInboundMappings() {
+    try {
+      const res = await fetch('/api/inbound-numbers');
+      const body = await readJson(res, 'Could not load the inbound numbers.');
+      setInboundMappings(body.mappings ?? []);
+      setInboundLoadError(null);
+    } catch (err) {
+      setInboundMappings([]);
+      setInboundLoadError(
+        err instanceof Error ? err.message : 'Could not load the inbound numbers.'
+      );
+    }
+  }
+
+  async function saveInboundMapping(phoneNumber: string, spreadsheetId: string) {
+    if (!phoneNumber.trim() || !spreadsheetId) return;
+    setSavingNumber(phoneNumber);
+    setInboundError(null);
+    try {
+      const res = await fetch('/api/inbound-numbers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone_number: phoneNumber.trim(), spreadsheet_id: spreadsheetId }),
+      });
+      await readJson(res, 'Failed to save mapping.');
+      loadInboundMappings();
+      setNewNumber('');
+      setNewNumberSurveyId('');
+    } catch (err) {
+      setInboundError(err instanceof Error ? err.message : 'Failed to save mapping.');
+    } finally {
+      setSavingNumber(null);
+    }
+  }
+
+  async function removeInboundNumber(phoneNumber: string) {
+    if (!window.confirm(`Unmap ${phoneNumber}? Inbound calls to this number will fail until it's reassigned.`)) {
+      return;
+    }
+    setSavingNumber(phoneNumber);
+    setInboundError(null);
+    try {
+      const res = await fetch(`/api/inbound-numbers/${encodeURIComponent(phoneNumber)}`, {
+        method: 'DELETE',
+      });
+      await readJson(res, 'Failed to remove mapping.');
+      setInboundMappings((prev) => (prev ? prev.filter((m) => m.phoneNumber !== phoneNumber) : prev));
+    } catch (err) {
+      setInboundError(err instanceof Error ? err.message : 'Failed to remove mapping.');
+    } finally {
+      setSavingNumber(null);
+    }
+  }
+
+  async function deleteSurvey(spreadsheetId: string, name: string) {
+    if (
+      !window.confirm(
+        `Delete "${name}"? This removes it from the list and moves its Google Sheet to Trash.`
+      )
+    ) {
+      return;
+    }
+
+    setDeletingId(spreadsheetId);
+    setDeleteError(null);
+    try {
+      const res = await fetch(`/api/surveys/${encodeURIComponent(spreadsheetId)}`, {
+        method: 'DELETE',
+      });
+      await readJson(res, 'Failed to delete survey.');
+      setSurveys((prev) => (prev ? prev.filter((s) => s.spreadsheetId !== spreadsheetId) : prev));
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete survey.');
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  async function loadSurveys() {
+    try {
+      const res = await fetch('/api/surveys');
+      const body = await readJson(res, 'Could not load your surveys.');
+      setSurveys(body.surveys ?? []);
+      setSurveysError(null);
+    } catch (err) {
+      setSurveys([]);
+      setSurveysError(err instanceof Error ? err.message : 'Could not load your surveys.');
+    }
+  }
+
+  useEffect(() => {
+    loadSurveys();
+    loadInboundMappings();
+  }, []);
+
+  function resetResults() {
+    setResult(null);
+    setScreener(null);
+    setPushState('idle');
+    setPushedUrl(null);
+    setPushedId(null);
+  }
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!file) return;
+
+    // Fail fast, so an oversized file doesn't cost a long upload first.
+    // The server enforces the same limit again on arrival -- that check is
+    // the real one, this is only a courtesy.
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setError(
+        `"${file.name}" is ${formatBytes(file.size)}. The limit is ${formatBytes(
+          MAX_UPLOAD_BYTES
+        )}. Choose a smaller document, or split it.`
+      );
+      setStatus('error');
+      return;
+    }
+
+    setStatus('parsing');
+    setError(null);
+    resetResults();
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('name', name.trim());
+    formData.append('type', surveyType);
+
+    try {
+      const res = await fetch('/api/parse', { method: 'POST', body: formData });
+      const body = await readJson(res, 'Could not parse that document.');
+      if (body.surveyType === 'screener') {
+        setScreener(body.result as ParsedScreener);
+      } else {
+        setResult(body.result as ParsedResult);
+      }
+      setStatus('done');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Something went wrong.');
+      setStatus('error');
+    }
+  }
+
+  async function pushQuestionsToSheet(
+    title: string,
+    questions: string[],
+    screenerToPersist?: ParsedScreener
+  ) {
+    setPushState('pushing');
+    setPushError(null);
+
+    try {
+      const res = await fetch('/api/sheets/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          questions,
+          name: title,
+          ...(screenerToPersist ? { screener: screenerToPersist } : {}),
+        }),
+      });
+      const body = await readJson(res, 'Failed to push to Google Sheet.');
+      setPushState('pushed');
+      setPushedUrl(body.url);
+      setPushedId(body.spreadsheetId);
+      loadSurveys();
+    } catch (err) {
+      setPushError(err instanceof Error ? err.message : 'Failed to push to Google Sheet.');
+      setPushState('error');
+    }
+  }
+
+  function copyJson() {
+    if (!result) return;
+    navigator.clipboard.writeText(JSON.stringify(result, null, 2));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  // --- Screener editing helpers -------------------------------------------
+
+  function updateQuestion(id: string, patch: Partial<ScreenerQuestion>) {
+    setScreener((prev) =>
+      prev
+        ? { ...prev, questions: prev.questions.map((q) => (q.id === id ? { ...q, ...patch } : q)) }
+        : prev
+    );
+  }
+
+  function resolveFlag(id: string) {
+    updateQuestion(id, { needs_review: false });
+  }
+
+  function updateOpening(index: number, patch: Partial<ScreenerOpening>) {
+    setScreener((prev) =>
+      prev
+        ? {
+            ...prev,
+            openings: prev.openings.map((o, i) => (i === index ? { ...o, ...patch } : o)),
+          }
+        : prev
+    );
+  }
+
+  function updateClosing(patch: Partial<ParsedScreener['closing']>) {
+    setScreener((prev) => (prev ? { ...prev, closing: { ...prev.closing, ...patch } } : prev));
+  }
+
+  function copyScript() {
+    if (!screener) return;
+    navigator.clipboard.writeText(renderScreenerScript(screener));
+    setScriptCopied(true);
+    setTimeout(() => setScriptCopied(false), 1500);
+  }
+
+  function downloadScript() {
+    if (!screener) return;
+    const blob = new Blob([renderScreenerScript(screener)], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${screener.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-script.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const unresolvedCount = screener ? screener.questions.filter((q) => q.needs_review).length : 0;
+
+  return (
+    <>
+      <header id="parse" style={{ marginBottom: 24, scrollMarginTop: 24 }}>
+        <h1>New parse</h1>
+        <p style={{ margin: '6px 0 0', fontSize: 14, color: 'var(--text-secondary)' }}>
+          Upload a document and we turn it into a callable survey sheet.
+        </p>
+      </header>
+
+      <form className="card stack" onSubmit={handleSubmit}>
+        <div>
+          <label htmlFor="name">Survey name (optional)</label>
+          <input
+            id="name"
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Panel Engagement & Interest Survey"
+            disabled={status === 'parsing'}
+          />
+        </div>
+
+        <div>
+          <label htmlFor="surveyType">Survey type</label>
+          <select
+            id="surveyType"
+            value={surveyType}
+            onChange={(e) => setSurveyType(e.target.value as SurveyType)}
+            disabled={status === 'parsing'}
+          >
+            <option value="simple">Simple survey (flat, linear questions)</option>
+            <option value="screener">Recruitment / qualifier screener (skip & termination logic)</option>
+          </select>
+          <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6 }}>
+            {surveyType === 'simple'
+              ? 'Every question is asked in order, no branching. Good for satisfaction surveys, feedback forms, NPS.'
+              : 'For moderator guides / recruiting scripts with real skip and disqualification logic. Produces an editable, numbered checklist instead of a flat list.'}
+          </p>
+        </div>
+
+        <div>
+          <label htmlFor="file">Source document</label>
+          <input
+            id="file"
+            type="file"
+            accept=".docx,.pdf,.txt,.md"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            disabled={status === 'parsing'}
+            required
+          />
+          <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6 }}>
+            .docx, .pdf, .txt, or .md, up to {formatBytes(MAX_UPLOAD_BYTES)}. Tables in .docx
+            are read as rating questions where appropriate.
+          </p>
+        </div>
+
+        {error && <p className="error-text">{error}</p>}
+
+        <div className="row" style={{ justifyContent: 'flex-end' }}>
+          <button type="submit" className="btn btn-primary" disabled={status === 'parsing' || !file}>
+            {status === 'parsing' ? 'Parsing…' : 'Parse document'}
+          </button>
+        </div>
+      </form>
+
+      {result && (
+        <div className="stack">
+          <div className="row">
+            <h2 style={{ fontSize: 18, margin: 0 }}>
+              {result.title} · {result.questions.length} question
+              {result.questions.length === 1 ? '' : 's'}
+            </h2>
+            <div className="row" style={{ gap: 8, width: 'auto' }}>
+              <button className="btn" onClick={copyJson}>
+                {copied ? 'Copied!' : 'Copy JSON'}
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={() => pushQuestionsToSheet(result.title, result.questions)}
+                disabled={pushState === 'pushing'}
+              >
+                {pushState === 'pushing'
+                  ? 'Creating sheet…'
+                  : pushState === 'pushed'
+                    ? 'Pushed ✓'
+                    : 'Push to new Google Sheet'}
+              </button>
+            </div>
+          </div>
+
+          {pushError && <p className="error-text">{pushError}</p>}
+
+          {pushedUrl && (
+            <SurveyCreatedPanel
+              url={pushedUrl}
+              spreadsheetId={pushedId}
+              note={
+                <>
+                  Pass this as the survey&apos;s <code>initial_context</code> value when
+                  triggering a Dograh call for it.
+                </>
+              }
+            />
+          )}
+
+          {result.flags.length > 0 && (
+            <div className="flags-panel">
+              <h3>Flagged for review ({result.flags.length})</h3>
+              <ul>
+                {result.flags.map((flag, i) => (
+                  <li key={i}>{flag}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="tabs">
+            <div className={`tab ${view === 'list' ? 'active' : ''}`} onClick={() => setView('list')}>
+              Question list
+            </div>
+            <div className={`tab ${view === 'json' ? 'active' : ''}`} onClick={() => setView('json')}>
+              Raw JSON
+            </div>
+          </div>
+
+          {view === 'list' ? (
+            <div>
+              {result.questions.map((q, i) => (
+                <div key={i} className="question-item">
+                  <div className="row" style={{ justifyContent: 'flex-start', gap: 8 }}>
+                    <span className="type-badge">{i + 1}</span>
+                  </div>
+                  <div className="question-text" style={{ marginTop: 6 }}>
+                    {q}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <pre className="json-view">{JSON.stringify(result, null, 2)}</pre>
+          )}
+        </div>
+      )}
+
+      {screener && (
+        <div className="stack">
+          <div className="row">
+            <h2 style={{ fontSize: 18, margin: 0 }}>
+              {screener.title} · {screener.questions.length} question
+              {screener.questions.length === 1 ? '' : 's'}
+            </h2>
+            {unresolvedCount > 0 && (
+              <span className="badge-danger">{unresolvedCount} flagged</span>
+            )}
+          </div>
+
+          {unresolvedCount > 0 && (
+            <div className="flags-panel">
+              <h3>Resolve flagged questions before exporting</h3>
+              <p style={{ margin: 0, fontSize: 13 }}>
+                {unresolvedCount} question{unresolvedCount === 1 ? '' : 's'} below need a quick
+                look -- extraction wasn&apos;t fully confident about them. Edit the field(s) in
+                question, then click &quot;Mark resolved&quot; on that question.
+              </p>
+            </div>
+          )}
+
+          {screener.flags.length > 0 && (
+            <div className="flags-panel">
+              <h3>Document-level flags ({screener.flags.length})</h3>
+              <ul>
+                {screener.flags.map((flag, i) => (
+                  <li key={i}>{flag}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="card stack">
+            <h3 style={{ fontSize: 14, margin: 0 }}>Opening{screener.openings.length > 1 ? 's' : ''}</h3>
+            {screener.openings.map((opening, i) => (
+              <div key={i} className="stack" style={{ gap: 8 }}>
+                <span className="type-badge" style={{ width: 'fit-content' }}>
+                  {opening.condition}
+                </span>
+                <div className="field-group">
+                  <label className="field-label">Script</label>
+                  <textarea
+                    rows={3}
+                    value={opening.script}
+                    onChange={(e) => updateOpening(i, { script: e.target.value })}
+                  />
+                </div>
+                <div className="field-group">
+                  <label className="field-label">If caller declines here</label>
+                  <textarea
+                    rows={2}
+                    value={opening.decline_response}
+                    onChange={(e) => updateOpening(i, { decline_response: e.target.value })}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="stack" style={{ gap: 10 }}>
+            {screener.questions.map((q) => (
+              <div
+                key={q.id}
+                className={`screener-question ${q.needs_review ? 'needs-review' : ''}`}
+              >
+                <div className="row" style={{ alignItems: 'flex-start' }}>
+                  <span className="type-badge">{q.id}</span>
+                  {q.needs_review && <span className="badge-danger">Needs review</span>}
+                </div>
+
+                <div className="field-group">
+                  <label className="field-label">Question</label>
+                  <textarea
+                    rows={2}
+                    value={q.text}
+                    onChange={(e) => updateQuestion(q.id, { text: e.target.value })}
+                  />
+                </div>
+
+                <div className="field-group">
+                  <label className="field-label">Skip if</label>
+                  <textarea
+                    rows={1}
+                    placeholder="(never skipped)"
+                    value={q.skip_if ?? ''}
+                    onChange={(e) => updateQuestion(q.id, { skip_if: e.target.value || null })}
+                  />
+                </div>
+
+                <div className="field-group">
+                  <label className="field-label">Terminate if</label>
+                  <textarea
+                    rows={1}
+                    placeholder="(never terminates)"
+                    value={q.terminate_if ?? ''}
+                    onChange={(e) => updateQuestion(q.id, { terminate_if: e.target.value || null })}
+                  />
+                </div>
+
+                <div className="field-group">
+                  <label className="field-label">Internal note (never spoken)</label>
+                  <textarea
+                    rows={1}
+                    placeholder="(none)"
+                    value={q.internal_note ?? ''}
+                    onChange={(e) => updateQuestion(q.id, { internal_note: e.target.value || null })}
+                  />
+                </div>
+
+                {q.needs_review && (
+                  <>
+                    <div className="review-note">{q.review_note ?? 'Uncertain extraction.'}</div>
+                    <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
+                      <button className="btn" onClick={() => resolveFlag(q.id)}>
+                        Mark resolved
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="card stack">
+            <h3 style={{ fontSize: 14, margin: 0 }}>Closing</h3>
+            <div className="field-group">
+              <label className="field-label">Invitation script</label>
+              <textarea
+                rows={3}
+                value={screener.closing.invitation_script}
+                onChange={(e) => updateClosing({ invitation_script: e.target.value })}
+              />
+            </div>
+            <div className="field-group">
+              <label className="field-label">If caller accepts</label>
+              <textarea
+                rows={2}
+                value={screener.closing.accept_response}
+                onChange={(e) => updateClosing({ accept_response: e.target.value })}
+              />
+            </div>
+            <div className="field-group">
+              <label className="field-label">If caller declines</label>
+              <textarea
+                rows={2}
+                value={screener.closing.decline_response}
+                onChange={(e) => updateClosing({ decline_response: e.target.value })}
+              />
+            </div>
+          </div>
+
+          {pushError && <p className="error-text">{pushError}</p>}
+
+          {pushedUrl && (
+            <SurveyCreatedPanel
+              url={pushedUrl}
+              spreadsheetId={pushedId}
+              note={
+                <>
+                  Use this as the <code>get_next_screener_question</code> preset parameter (see
+                  dograh/tools-setup.md). The skip and terminate logic lives in the sheet&apos;s{' '}
+                  <strong>screener</strong> tab and is resolved server-side. The script below is
+                  the agent&apos;s Knowledge Base document.
+                </>
+              }
+            />
+          )}
+
+          {pushedId && <AgentPromptsPanel spreadsheetId={pushedId} />}
+
+          <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+            <button className="btn" onClick={copyScript} disabled={unresolvedCount > 0}>
+              {scriptCopied ? 'Copied!' : 'Copy script'}
+            </button>
+            <button className="btn" onClick={downloadScript} disabled={unresolvedCount > 0}>
+              Download .txt
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={() =>
+                pushQuestionsToSheet(
+                  screener.title,
+                  screener.questions.map((q) => q.text),
+                  screener
+                )
+              }
+              disabled={unresolvedCount > 0 || pushState === 'pushing'}
+            >
+              {pushState === 'pushing'
+                ? 'Creating sheet…'
+                : pushState === 'pushed'
+                  ? 'Pushed ✓'
+                  : 'Push to new Google Sheet'}
+            </button>
+          </div>
+          {unresolvedCount > 0 && (
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)', textAlign: 'right' }}>
+              Resolve all flagged questions above to enable export/push.
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="stack">
+        <h2 id="surveys" style={{ scrollMarginTop: 24 }}>Past surveys</h2>
+        {surveysError ? (
+          <p className="error-text">{surveysError}</p>
+        ) : surveys === null ? (
+          <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Loading…</p>
+        ) : surveys.length === 0 ? (
+          <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+            None yet — push a parsed document above to create the first one.
+          </p>
+        ) : (
+          <div className="stack" style={{ gap: 8 }}>
+            {surveys.map((s) => (
+              <SurveyRow
+                key={s.spreadsheetId}
+                survey={s}
+                deleting={deletingId === s.spreadsheetId}
+                onDelete={() => deleteSurvey(s.spreadsheetId, s.name)}
+              />
+            ))}
+          </div>
+        )}
+        {deleteError && <p className="error-text">{deleteError}</p>}
+      </div>
+
+      <div className="stack">
+        <h2 id="numbers" style={{ scrollMarginTop: 24 }}>Inbound numbers</h2>
+        <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0 }}>
+          Which survey each inbound phone number is currently pointed at. Reassigning a number
+          to a new survey is just changing it here -- no Dograh tool config needs touching, as
+          long as the inbound tools use <code>phone_number</code> (
+          <code>{'{{initial_context.called_number}}'}</code>) as their Preset Parameter instead
+          of a literal spreadsheet_id.
+        </p>
+
+        {inboundError && <p className="error-text">{inboundError}</p>}
+
+        {inboundLoadError ? (
+          <p className="error-text">{inboundLoadError}</p>
+        ) : inboundMappings === null ? (
+          <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Loading…</p>
+        ) : inboundMappings.length === 0 ? (
+          <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+            No numbers mapped yet -- add one below.
+          </p>
+        ) : (
+          <div className="stack" style={{ gap: 8 }}>
+            {inboundMappings.map((m) => {
+              const survey = surveys?.find((s) => s.spreadsheetId === m.spreadsheetId);
+              const busy = savingNumber === m.phoneNumber;
+              return (
+                <div key={m.phoneNumber} className="question-item row">
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>{m.phoneNumber}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                      {survey ? survey.name : m.spreadsheetId}
+                      {m.updatedAt ? ` · updated ${new Date(m.updatedAt).toLocaleString()}` : ''}
+                    </div>
+                  </div>
+                  <div className="row" style={{ gap: 8, width: 'auto' }}>
+                    <select
+                      value={m.spreadsheetId}
+                      disabled={busy || !surveys}
+                      onChange={(e) => saveInboundMapping(m.phoneNumber, e.target.value)}
+                      style={{ width: 220 }}
+                    >
+                      {surveys?.map((s) => (
+                        <option key={s.spreadsheetId} value={s.spreadsheetId}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="btn"
+                      style={{ color: 'var(--danger)' }}
+                      disabled={busy}
+                      onClick={() => removeInboundNumber(m.phoneNumber)}
+                    >
+                      {busy ? '…' : 'Unmap'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="card row" style={{ gap: 8 }}>
+          <input
+            type="text"
+            placeholder="Phone number, e.g. +14165551234"
+            value={newNumber}
+            onChange={(e) => setNewNumber(e.target.value)}
+            style={{ flex: 1 }}
+          />
+          <select
+            value={newNumberSurveyId}
+            onChange={(e) => setNewNumberSurveyId(e.target.value)}
+            style={{ width: 220 }}
+          >
+            <option value="">Select a survey…</option>
+            {surveys?.map((s) => (
+              <option key={s.spreadsheetId} value={s.spreadsheetId}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+          <button
+            className="btn btn-primary"
+            disabled={!newNumber.trim() || !newNumberSurveyId || savingNumber === newNumber}
+            onClick={() => saveInboundMapping(newNumber, newNumberSurveyId)}
+          >
+            {savingNumber === newNumber ? 'Adding…' : 'Add'}
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}

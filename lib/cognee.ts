@@ -313,8 +313,17 @@ export interface SearchResult {
  * Query an agent's knowledge base -- the retrieval half of remember/cognify.
  * Verified against the live cognee-backend OpenAPI schema (2026-09-16):
  * `POST /api/v1/search`, same `X-Api-Key` auth as remember/add, body
- * `{query, searchType}`, response an array of
+ * `{query, searchType, datasets}`, response an array of
  * `{search_result, dataset_id, dataset_name}`.
+ *
+ * `datasets` MUST match the name every upload already writes into --
+ * `rememberDocument`/`addDocumentsBatch`/`listAgentDocuments` all default to
+ * 'main_dataset'. Omitting it here (as an earlier version of this function
+ * did) leaves Cognee to pick its own default dataset scope, which is not
+ * where anything was actually ingested -- confirmed live 2026-09-16: a real
+ * GRAPH_COMPLETION answer came back synthesized from empty context ("no
+ * specific information... in the provided context") for a document that was
+ * genuinely uploaded. Not an ingestion failure -- a dataset-scope mismatch.
  *
  * 'GRAPH_COMPLETION' (default) returns an LLM answer grounded in the graph
  * -- the fastest way to confirm ingested content is actually retrievable.
@@ -323,12 +332,13 @@ export interface SearchResult {
 export async function searchKnowledgeBase(
   agentApiKey: string,
   query: string,
-  searchType: 'GRAPH_COMPLETION' | 'CHUNKS' | 'SUMMARIES' = 'GRAPH_COMPLETION'
+  searchType: 'GRAPH_COMPLETION' | 'CHUNKS' | 'SUMMARIES' = 'GRAPH_COMPLETION',
+  datasetName?: string
 ): Promise<SearchResult[]> {
   const data = await cogneeFetch('/api/v1/search', {
     method: 'POST',
     headers: { 'X-Api-Key': agentApiKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, searchType }),
+    body: JSON.stringify({ query, searchType, datasets: [datasetName ?? 'main_dataset'] }),
   });
   const list = Array.isArray(data) ? data : [];
   return list.map((item: any) => ({
