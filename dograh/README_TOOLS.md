@@ -585,3 +585,60 @@ Swap in `create-agent-request-inbound.json` or
 tool UUIDs (from the tools above) before running -- the JSON files in this
 repo may still have placeholder UUIDs if tools were recreated since they
 were last filled in.
+
+---
+
+## Call review webhook (knowledge gap alerts)
+
+Post-call self-improvement for any agent that has a Cognee knowledge base
+(see `lib/cognee.ts`, `lib/callReview.ts`). After each call, the transcript
+is checked for questions the KB couldn't answer well, and every gap found
+is logged to the "kb_gaps" tab on the index sheet (and, if a Slack webhook
+is set for the client under Call review on its page, posted there too).
+
+This is a **Webhook Node** (Dograh's own sync-to-external-system feature),
+not an HTTP API tool from the table above -- add it right before End Call,
+same placement as the existing gathered_context sync webhook.
+
+| Field | Value |
+|---|---|
+| URL | `https://sp.cognexion.com/api/agent/call-review` |
+| Method | `POST` |
+| Header | `x-agent-secret` = (see "Before you start" above) |
+
+**Body template -- needs two fields this app has no other way to learn:**
+
+```json
+{
+  "conversation_id": "{{initial_context.conversation_id}}",
+  "client_id": "<this client's clientId from survey-parser's Clients page>",
+  "agent_name": "<the agent name this KB agent was provisioned under>",
+  "transcript": "{{ ??? }}"
+}
+```
+
+`client_id`/`agent_name` are not inferable from anything Dograh already
+sends -- unlike `spreadsheet_id` there is no stored mapping from a Dograh
+workflow to a KB client. Set them as literal Preset Parameter values when
+building this webhook (one webhook per agent, not reusable across clients
+the way the survey tools are).
+
+**`transcript` is UNVERIFIED.** Docs.dograh.com could not be reached while
+writing this integration, so it's not confirmed whether the full transcript
+is available as a template variable at all. Before relying on this in
+production:
+
+1. Check Dograh's Webhook Node editor for a transcript-shaped variable
+   (candidates to try: `{{transcript}}`, `{{gathered_context.transcript}}`,
+   `{{call.transcript}}`).
+2. If none resolves, this needs a fallback: fetch the transcript from
+   Dograh's own API using `{{initial_context.workflow_run_id}}` (exposed
+   per dograh-hq/dograh PR #774) instead of templating it into the webhook
+   body directly -- not implemented in `/api/agent/call-review` yet, since
+   the fetch endpoint's shape isn't confirmed either. `lib/dograh.ts` only
+   has `/workflow/*` (agent CRUD), nothing for a single call/run's
+   transcript.
+3. Whichever works, test on one real call and confirm a real row lands in
+   the "kb_gaps" tab (or nothing, if the call had no gaps) before trusting
+   this against live traffic -- same "verify on a live test call" discipline
+   as everything else in this file.

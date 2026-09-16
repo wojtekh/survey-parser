@@ -335,6 +335,68 @@ function KnowledgeBaseSection({ clientId, anyAgentName }: { clientId: string; an
   );
 }
 
+function CallReviewSection({ clientId }: { clientId: string }) {
+  const [webhookUrl, setWebhookUrl] = useState('');
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedMessage, setSavedMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch(`/api/clients/${clientId}/call-review`)
+      .then((res) => res.json())
+      .then((body) => setWebhookUrl(body.slackWebhookUrl ?? ''))
+      .catch(() => {})
+      .finally(() => setLoaded(true));
+  }, [clientId]);
+
+  async function save() {
+    setSaving(true);
+    setSaveError(null);
+    setSavedMessage(null);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/call-review`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slack_webhook_url: webhookUrl.trim() || null }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? 'Failed to save.');
+      setSavedMessage(webhookUrl.trim() ? 'Saved.' : 'Alerts disabled.');
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to save.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="cw-card stack">
+      <div className="cw-section-title">Call review — knowledge gap alerts</div>
+      <p style={{ fontSize: 13, color: 'var(--cw-text-tertiary)', margin: 0 }}>
+        After each call, the transcript is checked for questions the knowledge base couldn&apos;t answer. Gaps are
+        always logged to the KB gaps sheet; a Slack webhook here also posts an alert. Optional — leave blank to log
+        only.
+      </p>
+      <div className="row" style={{ gap: 8 }}>
+        <input
+          type="text"
+          placeholder="https://hooks.slack.com/services/..."
+          value={webhookUrl}
+          onChange={(e) => setWebhookUrl(e.target.value)}
+          disabled={!loaded || saving}
+          style={{ flex: 1 }}
+        />
+        <button className="cw-btn cw-btn-primary" onClick={save} disabled={!loaded || saving}>
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+      {saveError && <p className="error-text" style={{ fontSize: 12, margin: 0 }}>{saveError}</p>}
+      {savedMessage && <p style={{ fontSize: 12, margin: 0, color: 'var(--cw-text-tertiary)' }}>{savedMessage}</p>}
+    </div>
+  );
+}
+
 function SurveySection({ clientId, clientName }: { clientId: string; clientName: string }) {
   const [linked, setLinked] = useState<SurveyEntry[] | null>(null);
   const [showAdd, setShowAdd] = useState(false);
@@ -620,6 +682,7 @@ export default function ClientDetailPage() {
                 ))}
               </div>
               <KnowledgeBaseSection clientId={client.clientId} anyAgentName={client.agents[0].name} />
+              <CallReviewSection clientId={client.clientId} />
             </>
           )}
 

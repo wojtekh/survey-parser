@@ -862,3 +862,78 @@ export async function resolveSpreadsheetId(input: {
 }
 
 export { normalizeSpreadsheetId };
+
+const KB_GAPS_TAB = 'kb_gaps';
+
+export interface KbGapEntry {
+  clientId: string;
+  agentName: string;
+  conversationId: string;
+  type: 'knowledge_gap' | 'retrieval_failure';
+  callerQuestion: string;
+  note: string;
+  satisfied: boolean;
+}
+
+/**
+ * Where the call-review evaluator (see lib/callReview.ts) logs every gap it
+ * finds in a call transcript -- unsatisfied outcomes, and for each one
+ * whether the knowledge existed in Cognee and wasn't surfaced
+ * ("retrieval_failure", self-healing via Cognee's feedback loop) or never
+ * existed at all ("knowledge_gap", needs a human to add a document). Same
+ * lazy-create-if-missing tab pattern as ensureInboundHeader, on the same
+ * index spreadsheet -- append-only, no client_id column keys anything here,
+ * this is a log, not a mapping.
+ */
+async function ensureKbGapsHeader(): Promise<void> {
+  const indexId = getIndexSheetId();
+
+  const meta = await authedFetch(`${SHEETS_BASE}/${indexId}?fields=sheets.properties.title`);
+  const titles: string[] = (meta.sheets ?? []).map((s: any) => s.properties?.title);
+
+  if (!titles.includes(KB_GAPS_TAB)) {
+    await authedFetch(`${SHEETS_BASE}/${indexId}:batchUpdate`, {
+      method: 'POST',
+      body: JSON.stringify({
+        requests: [{ addSheet: { properties: { title: KB_GAPS_TAB } } }],
+      }),
+    });
+  }
+
+  const data = await readRangeOrEmpty(`${SHEETS_BASE}/${indexId}/values/${KB_GAPS_TAB}!A1:H1`);
+  if (data?.values?.length) return;
+
+  await authedFetch(`${SHEETS_BASE}/${indexId}/values/${KB_GAPS_TAB}!A1:H1?valueInputOption=RAW`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      values: [
+        ['timestamp', 'client_id', 'agent_name', 'conversation_id', 'type', 'caller_question', 'note', 'satisfied'],
+      ],
+    }),
+  });
+}
+
+export async function appendKbGap(entry: KbGapEntry): Promise<void> {
+  await ensureKbGapsHeader();
+  const indexId = getIndexSheetId();
+  await authedFetch(
+    `${SHEETS_BASE}/${indexId}/values/${KB_GAPS_TAB}!A:H:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        values: [
+          [
+            new Date().toISOString(),
+            entry.clientId,
+            entry.agentName,
+            entry.conversationId,
+            entry.type,
+            entry.callerQuestion,
+            entry.note,
+            entry.satisfied ? 'yes' : 'no',
+          ],
+        ],
+      }),
+    }
+  );
+}
