@@ -206,7 +206,7 @@ label, .field-label {
 }
 .field-group { margin-bottom: 16px; }
 
-input[type='text'], input[type='email'], input:not([type]), select, textarea {
+input[type='text'], input[type='email'], input[type='password'], input:not([type]), select, textarea {
   width: 100%;
   font: 400 14px/20px var(--font-sans);
   color: var(--gray-900);
