@@ -17,7 +17,7 @@ export default function RailNav() {
     <nav className="app-rail">
       <div className="app-rail-brand">
         Cognexion
-        <span>Survey parser</span>
+        <span>Console</span>
       </div>
 
       <div className="app-rail-label">Workspace</div>

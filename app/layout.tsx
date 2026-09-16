@@ -3,8 +3,8 @@ import RailNav from './RailNav';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Survey Parser',
-  description: 'Upload a document, see the parsed questions.',
+  title: 'Cognexion Console',
+  description: 'Clients, knowledge bases, surveys, and voice agents.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
