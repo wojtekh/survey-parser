@@ -18,10 +18,13 @@ import crypto from 'crypto';
 //    /agents/create -- so each client gets its own registered Cognee user,
 //    and that user's own login (not an admin's) is what mints its agent
 //    identities. This is what keeps agents scoped under the right client
-//    automatically. Tenant creation (for sharing context across a client's
-//    agents) is intentionally not implemented yet -- per-client-user
-//    isolation is enough for a single agent per client; add it if/when a
-//    client needs multiple agents to share memory.
+//    automatically.
+// 3. One Cognee identity is shared by every voice agent on a client, not one
+//    per agent (2026-09-16). A client's first provision mints a single
+//    agent identity; every agent name added after that reuses its
+//    agentId/apiKey rather than minting a new one. This is what makes the
+//    knowledge base shared across a client's agents -- they all read/write
+//    the same Cognee dataset because they authenticate with the same key.
 
 function getApiUrl(): string {
   const url = process.env.COGNEE_API_URL;
@@ -178,10 +181,14 @@ export interface ProvisionResult {
 /**
  * Idempotent: reuses the client's existing Cognee user/password if this
  * client was provisioned before (pass the previously-stored email +
- * encrypted password back in), and skips creating an agent identity for any
- * agentName that already exists in existingAgents. Safe to call again after
- * a partial failure, or later to add one more agent to an already-KB-enabled
- * client.
+ * encrypted password back in), and skips adding an agent for any agentName
+ * that already exists in existingAgents. Safe to call again after a partial
+ * failure, or later to add one more agent to an already-KB-enabled client.
+ *
+ * All agent names for a client share ONE Cognee identity -- minted once, on
+ * the first name added, then reused for every name after. This is the whole
+ * mechanism behind the shared-KB-per-client design: they all carry the same
+ * agentId/apiKey, so they all read and write the same Cognee dataset.
  */
 export async function provisionClientKnowledgeBase(params: {
   clientId: string;
@@ -206,18 +213,21 @@ export async function provisionClientKnowledgeBase(params: {
     await registerCogneeUser(email, password);
   }
 
-  const token = await loginCogneeUser(email, password);
+  let shared: Omit<ProvisionedAgent, 'name'> | null = existingAgents[0]
+    ? { agentId: existingAgents[0].agentId, agentEmail: existingAgents[0].agentEmail, apiKeyEnc: existingAgents[0].apiKeyEnc }
+    : null;
 
-  const newAgents: ProvisionedAgent[] = [];
-  for (const name of toCreate) {
-    const created = await createAgentIdentity(token, name);
-    newAgents.push({
-      name,
+  if (!shared && toCreate.length > 0) {
+    const token = await loginCogneeUser(email, password);
+    const created = await createAgentIdentity(token, params.clientId);
+    shared = {
       agentId: created.agentId,
       agentEmail: created.agentEmail,
       apiKeyEnc: encryptSecret(created.agentApiKey),
-    });
+    };
   }
+
+  const newAgents: ProvisionedAgent[] = toCreate.map((name) => ({ name, ...shared! }));
 
   return {
     cogneeUserEmail: email,
@@ -339,40 +349,17 @@ export async function deleteAgentDocument(
 }
 
 /**
- * Revoke one agent's Cognee identity (login/API key), using the CLIENT's
- * own token -- agent identities are child users of the client, so deleting
- * one requires the parent's auth, same as creating one does.
- *
- * Deliberately does NOT touch the agent's dataset/documents -- Wojtek's
- * explicit call is that documents may be shared (via a future tenant-level
- * grant) and must survive a single agent's removal. Whether Cognee's own
- * DELETE /agents/{id} internally cascades to the dataset is an open
- * question we haven't verified yet (see client-onboarding-plan.md) --
- * if it turns out to cascade, this function's contract is violated by
- * Cognee itself, not by this code, and the mitigation would be granting
- * the client's own parent user access to the dataset *before* calling
- * this, so the data has another owner regardless of what deletion does.
- */
-export async function deleteCogneeAgent(
-  cogneeUserEmail: string,
-  cogneePasswordEnc: string,
-  agentId: string
-): Promise<void> {
-  const password = decryptSecret(cogneePasswordEnc);
-  const token = await loginCogneeUser(cogneeUserEmail, password);
-  await cogneeFetch(`/api/v1/agents/${agentId}`, {
-    method: 'DELETE',
-    headers: { Authorization: `Bearer ${token}` },
-  });
-}
-
-/**
- * Cascade-delete every agent identity under a client's Cognee user. Best
- * effort per agent -- collects failures rather than throwing on the first
- * one, so a single already-gone or already-broken agent doesn't block
- * cleanup of the rest. Cognee has no "delete user" endpoint we've found,
- * so the client's own parent Cognee account is NOT deleted here -- only
- * its agent identities are. See client-onboarding-plan.md.
+ * Cascade-delete the agent identity/identities under a client's Cognee
+ * user -- called only when the whole CLIENT is deleted, never for removing
+ * one voice agent (all of a client's agents share one Cognee identity, so
+ * revoking it takes every agent's access down at once; that's only correct
+ * when the client itself is going away). Dedupes agentIds first, since
+ * every agent row on a client now carries the same shared agentId -- one
+ * real Cognee identity behind however many local rows. Best effort --
+ * collects failures rather than throwing on the first one. Cognee has no
+ * "delete user" endpoint we've found, so the client's own parent Cognee
+ * account is NOT deleted here -- only its agent identity is. See
+ * client-onboarding-plan.md.
  */
 export async function deleteAllCogneeAgents(
   cogneeUserEmail: string,
@@ -383,7 +370,7 @@ export async function deleteAllCogneeAgents(
   const token = await loginCogneeUser(cogneeUserEmail, password);
 
   const failed: { agentId: string; error: string }[] = [];
-  for (const agentId of agentIds) {
+  for (const agentId of new Set(agentIds)) {
     try {
       await cogneeFetch(`/api/v1/agents/${agentId}`, {
         method: 'DELETE',

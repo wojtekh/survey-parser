@@ -56,12 +56,13 @@ export async function PATCH(request: Request, { params }: { params: { clientId: 
 
 // DELETE /api/clients/:clientId
 //
-// Cascade-deletes: revokes every one of the client's agent identities in
-// Cognee first, then removes the client row -- only once all agents are
-// gone. If any agent fails to revoke, the client row is left in place
-// (not partially deleted) so this is safely retriable, same philosophy as
-// the provision route. A client with no Cognee agents (kbEnabled=false, or
-// kbEnabled=true but never provisioned) skips straight to the row delete.
+// Cascade-deletes: revokes the client's shared Cognee identity first (every
+// agent row carries the same agentId -- deleteAllCogneeAgents dedupes it),
+// then removes the client row. If revocation fails, the client row is left
+// in place (not partially deleted) so this is safely retriable, same
+// philosophy as the provision route. A client with no Cognee agents
+// (kbEnabled=false, or kbEnabled=true but never provisioned) skips straight
+// to the row delete.
 export async function DELETE(_request: Request, { params }: { params: { clientId: string } }) {
   const client = await getClient(params.clientId).catch(() => null);
   if (!client) {

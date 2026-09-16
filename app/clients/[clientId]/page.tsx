@@ -74,19 +74,66 @@ function AgentSection({
 }: {
   clientId: string;
   agent: ClientAgent;
-  onAgentDeleted: (agentId: string) => void;
+  onAgentDeleted: (name: string) => void;
 }) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deletingAgent, setDeletingAgent] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function deleteAgent() {
+    setDeletingAgent(true);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/agents/${encodeURIComponent(agent.name)}`, {
+        method: 'DELETE',
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? 'Failed to delete agent.');
+      onAgentDeleted(agent.name);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete agent.');
+      setDeletingAgent(false);
+      setConfirmingDelete(false);
+    }
+  }
+
+  return (
+    <div className="cw-agent-card">
+      <div className="cw-agent-head">
+        <div>
+          <div className="cw-agent-name">{agent.name}</div>
+          <div className="cw-agent-meta">{agent.agentEmail}</div>
+        </div>
+        <button className="cw-icon-btn danger" title="Delete agent" onClick={() => setConfirmingDelete(true)}>
+          ✕
+        </button>
+      </div>
+
+      {deleteError && <p className="error-text" style={{ fontSize: 12 }}>{deleteError}</p>}
+
+      {confirmingDelete && (
+        <ConfirmModal
+          title={`Delete ${agent.name}?`}
+          body="Removes this agent from the client. The client's shared knowledge base and its documents are not affected -- other agents on this client keep access."
+          confirmLabel="Delete agent"
+          busy={deletingAgent}
+          onConfirm={deleteAgent}
+          onCancel={() => setConfirmingDelete(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function KnowledgeBaseSection({ clientId, anyAgentName }: { clientId: string; anyAgentName: string }) {
   const [documents, setDocuments] = useState<AgentDocument[] | null>(null);
   const [docsError, setDocsError] = useState<string | null>(null);
   const [files, setFiles] = useState<FileList | null>(null);
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'error'>('idle');
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [deletingAgent, setDeletingAgent] = useState(false);
   const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
 
   function loadDocuments() {
-    fetch(`/api/clients/${clientId}/documents?agent_name=${encodeURIComponent(agent.name)}`)
+    fetch(`/api/clients/${clientId}/documents?agent_name=${encodeURIComponent(anyAgentName)}`)
       .then(async (res) => {
         const body = await res.json();
         if (!res.ok) throw new Error(body.error ?? 'Failed to list documents.');
@@ -98,7 +145,7 @@ function AgentSection({
   useEffect(() => {
     loadDocuments();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agent.name]);
+  }, [anyAgentName]);
 
   async function upload() {
     if (!files || files.length === 0) return;
@@ -107,7 +154,7 @@ function AgentSection({
     try {
       const form = new FormData();
       Array.from(files).forEach((f) => form.append('file', f));
-      form.append('agent_name', agent.name);
+      form.append('agent_name', anyAgentName);
       const res = await fetch(`/api/clients/${clientId}/documents`, { method: 'POST', body: form });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? 'Upload failed.');
@@ -127,7 +174,7 @@ function AgentSection({
       const res = await fetch(`/api/clients/${clientId}/documents`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agent_name: agent.name, dataset_id: doc.datasetId, data_id: doc.dataId }),
+        body: JSON.stringify({ agent_name: anyAgentName, dataset_id: doc.datasetId, data_id: doc.dataId }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? 'Failed to delete document.');
@@ -139,31 +186,9 @@ function AgentSection({
     }
   }
 
-  async function deleteAgent() {
-    setDeletingAgent(true);
-    try {
-      const res = await fetch(`/api/clients/${clientId}/agents/${agent.agentId}`, { method: 'DELETE' });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? 'Failed to delete agent.');
-      onAgentDeleted(agent.agentId);
-    } catch (err) {
-      setDocsError(err instanceof Error ? err.message : 'Failed to delete agent.');
-      setDeletingAgent(false);
-      setConfirmingDelete(false);
-    }
-  }
-
   return (
-    <div className="cw-agent-card">
-      <div className="cw-agent-head">
-        <div>
-          <div className="cw-agent-name">{agent.name}</div>
-          <div className="cw-agent-meta">{agent.agentEmail}</div>
-        </div>
-        <button className="cw-icon-btn danger" title="Delete agent" onClick={() => setConfirmingDelete(true)}>
-          ✕
-        </button>
-      </div>
+    <div className="cw-card stack">
+      <div className="cw-section-title">Knowledge base — shared by every agent on this client</div>
 
       <div className="cw-dropzone">
         <div style={{ flex: 1 }}>
@@ -215,17 +240,6 @@ function AgentSection({
             </div>
           ))}
         </div>
-      )}
-
-      {confirmingDelete && (
-        <ConfirmModal
-          title={`Delete ${agent.name}?`}
-          body="This revokes the agent's Cognee login and API key. Its uploaded documents are NOT deleted -- they may be shared with other agents on this client."
-          confirmLabel="Delete agent"
-          busy={deletingAgent}
-          onConfirm={deleteAgent}
-          onCancel={() => setConfirmingDelete(false)}
-        />
       )}
     </div>
   );
@@ -311,8 +325,8 @@ export default function ClientDetailPage() {
     }
   }
 
-  function onAgentDeleted(agentId: string) {
-    setClient((prev) => (prev ? { ...prev, agents: prev.agents.filter((a) => a.agentId !== agentId) } : prev));
+  function onAgentDeleted(name: string) {
+    setClient((prev) => (prev ? { ...prev, agents: prev.agents.filter((a) => a.name !== name) } : prev));
   }
 
   async function provisionAgent(e: FormEvent) {
@@ -415,14 +429,17 @@ export default function ClientDetailPage() {
 
           {client.agents.length === 0 ? (
             <p style={{ fontSize: 13, color: 'var(--cw-text-tertiary)' }}>
-              No agent identities yet -- add the first Dograh agent for this client below.
+              No agents yet -- add the first Dograh agent for this client below.
             </p>
           ) : (
-            <div className="stack" style={{ gap: 12 }}>
-              {client.agents.map((a) => (
-                <AgentSection key={a.agentId} clientId={client.clientId} agent={a} onAgentDeleted={onAgentDeleted} />
-              ))}
-            </div>
+            <>
+              <div className="stack" style={{ gap: 12 }}>
+                {client.agents.map((a) => (
+                  <AgentSection key={a.name} clientId={client.clientId} agent={a} onAgentDeleted={onAgentDeleted} />
+                ))}
+              </div>
+              <KnowledgeBaseSection clientId={client.clientId} anyAgentName={client.agents[0].name} />
+            </>
           )}
 
           <form className="cw-card row" onSubmit={provisionAgent} style={{ gap: 8 }}>
@@ -453,7 +470,7 @@ export default function ClientDetailPage() {
       {confirmingDeleteClient && (
         <ConfirmModal
           title={`Delete ${client.name}?`}
-          body={`This revokes all ${client.agents.length} agent identit${client.agents.length === 1 ? 'y' : 'ies'} in Cognee and permanently removes this client. This cannot be undone.`}
+          body={`This revokes the client's Cognee identity (and its ${client.agents.length} voice agent${client.agents.length === 1 ? '' : 's'}' access to it), and permanently removes this client. This cannot be undone.`}
           confirmLabel="Delete client"
           busy={deletingClient}
           onConfirm={deleteClient}

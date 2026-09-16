@@ -204,15 +204,19 @@ export async function deleteClientRecord(clientId: string): Promise<void> {
   }
 }
 
-/** Strip one agent out of a client's agent list and persist -- used after successfully revoking that agent's Cognee identity. */
-export async function removeAgentFromClient(clientId: string, agentId: string): Promise<Client> {
+/**
+ * Strip one agent out of a client's agent list and persist. Keyed by name,
+ * not agentId -- every agent on a client now shares one Cognee agentId (see
+ * lib/cognee.ts), so agentId can no longer identify a single row.
+ */
+export async function removeAgentFromClient(clientId: string, agentName: string): Promise<Client> {
   const client = await getClient(clientId);
   if (!client) {
     throw new Error(`Client ${clientId} not found -- can't remove agent.`);
   }
   const updated: Client = {
     ...client,
-    agents: client.agents.filter((a) => a.agentId !== agentId),
+    agents: client.agents.filter((a) => a.name !== agentName),
   };
   await updateClient(updated);
   return updated;

@@ -13,7 +13,7 @@ export type SurveyType = 'simple' | 'screener';
 // multipart/form-data: { file: File, name?: string, type?: 'simple' | 'screener' }
 // Upload -> parse, nothing persisted server-side. The response is the full
 // result; it's up to whatever consumes this later (a Sheet-writing
-// automation, a copy/paste into BuildShip/n8n) to store it.
+// automation, a copy/paste into BuildShip/Activepieces) to store it.
 //
 // type='simple' (default): flat linear survey, one plain question per line
 // -- see generateQuestionsFromDocument. type='screener': recruitment/
